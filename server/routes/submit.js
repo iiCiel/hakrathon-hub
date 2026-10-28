@@ -71,6 +71,8 @@ function shapeSub(t, s, viewer) {
     team_id: t.id, project_title: s.project_title, prototype_url: s.prototype_url,
     repo_url: s.repo_url, repo_sha: s.repo_sha, repo_branch: s.repo_branch, repo_commit_date: s.repo_commit_date,
     repo_snapshot_at: s.repo_snapshot_at, repo_error: s.repo_error, repo_final: !!s.repo_final,
+    // "Official" only when the freeze snapshot actually succeeded (taken at/after this team's freeze, no error).
+    repo_official: !!s.repo_final && !s.repo_error && !!s.repo_snapshot_at && Date.parse(s.repo_snapshot_at) >= S.freezeAt(t) - 1000,
     zip_name: s.zip_name, zip_at: s.zip_at, has_repo: source.hasSource(t.id, 'repo'), has_zip: source.hasSource(t.id, 'zip'),
     video_url: s.video_url, video_file: !!s.video_file, video_seconds: s.video_seconds,
     brief: JSON.parse(s.brief || '{}'), brief_file: s.brief_file ? path.extname(s.brief_file) : '',
@@ -99,7 +101,7 @@ function editable(req) {
   }
   return { u, t };
 }
-const changed = (t) => { bus.emit(`team:${t.id}`, 'submission:update', {}); bus.emit('staff', 'staff:update', { kind: 'submission' }); };
+const changed = (t) => { bus.emit(`team:${t.id}`, 'submission:update', { teamId: t.id }); bus.emit('staff', 'staff:update', { kind: 'submission', teamId: t.id }); };
 
 r.get('/submission', wrap((req) => {
   const u = A.requireUser(req);
@@ -148,15 +150,19 @@ async function doSnapshot(t, repoUrl, userId, final = false, useToken = false) {
   if (other) throw new HttpError(409, 'Another team already linked that repository. Use your own team\'s repo, or ask staff.');
   cloning.add(t.id);
   try {
-    const snap = await source.snapshotRepo(t.id, repoUrl, { useToken });
+    const snap = await source.snapshotRepo(t.id, repoUrl, { useToken, before: final ? S.freezeAt(t) : 0 });
     run(`UPDATE submissions SET repo_url = ?, repo_sha = ?, repo_branch = ?, repo_commit_date = ?, repo_snapshot_at = ?, repo_error = '',
          repo_final = ?, updated_at = ? WHERE team_id = ?`, snap.url, snap.sha, snap.branch, snap.commitDate, now(), final ? 1 : 0, now(), t.id);
-    log(t.id, userId, final ? 'repo.final-snapshot' : 'repo.snapshot', `${snap.url}@${snap.sha}`);
+    log(t.id, userId, final ? 'repo.final-snapshot' : 'repo.snapshot', `${snap.url}@${snap.sha}${final ? (snap.afterFreeze ? ' (no commit before the freeze; took the latest)' : ' (last commit before the freeze)') : ''}`);
     return snap;
   } catch (e) {
     const msg = e.status ? e.message : 'Snapshot failed on the server. Try again or ask staff.';
     if (!e.status) console.error(`[snapshot] team ${t.id}:`, e);
-    run('UPDATE submissions SET repo_url = ?, repo_error = ?, updated_at = ? WHERE team_id = ?', repoUrl, msg, now(), t.id);
+    const cur = get('SELECT repo_url, repo_sha FROM submissions WHERE team_id = ?', t.id) || {};
+    if (cur.repo_sha && String(cur.repo_url).toLowerCase() !== String(repoUrl).toLowerCase()) {
+      // Keep URL and snapshot in agreement: the files on record are still from the old repo.
+      run('UPDATE submissions SET repo_error = ?, updated_at = ? WHERE team_id = ?', `${msg} (tried ${repoUrl}; the snapshot on record is still from ${cur.repo_url})`, now(), t.id);
+    } else run('UPDATE submissions SET repo_url = ?, repo_error = ?, updated_at = ? WHERE team_id = ?', repoUrl, msg, now(), t.id);
     log(t.id, userId, final ? 'repo.final-snapshot-failed' : 'repo.snapshot-failed', msg);
     throw e.status ? e : new HttpError(500, msg);
   } finally { cloning.delete(t.id); }
@@ -286,20 +292,35 @@ r.get('/submissions/:teamId/log', wrap((req) => {
 
 // ---------- build-freeze sweep: take the official repo snapshot when each team freezes ----------
 const finalizing = new Set();
+const finalTries = new Map(), finalRetryAt = new Map();
 async function freezeSweep() {
-  for (const t of all('SELECT * FROM teams')) {
-    if (!S.isFrozen(t) || finalizing.has(t.id)) continue;
+  const due = all('SELECT * FROM teams').filter((t) => {
+    if (!S.isFrozen(t) || finalizing.has(t.id) || cloning.has(t.id)) return false; // a running snapshot: next sweep
+    if (Date.now() < (finalRetryAt.get(t.id) || 0)) return false;
     const s = get('SELECT repo_url, repo_final FROM submissions WHERE team_id = ?', t.id);
-    if (!s || !s.repo_url || s.repo_final) continue;
+    return s && s.repo_url && !s.repo_final;
+  });
+  // All teams freeze at once, so clone in parallel (a few at a time) rather than one by one.
+  const one = async (t) => {
+    const s = get('SELECT repo_url FROM submissions WHERE team_id = ?', t.id);
     finalizing.add(t.id);
     try {
       await doSnapshot(t, s.repo_url, null, true);
       console.log(`[freeze] final snapshot taken for team ${t.name}`);
+      finalTries.delete(t.id); finalRetryAt.delete(t.id);
     } catch (e) {
-      run('UPDATE submissions SET repo_final = 1 WHERE team_id = ?', t.id); // don't retry forever; staff can re-snapshot
-      console.log(`[freeze] final snapshot failed for team ${t.name}: ${e.message}`);
+      // Wi-Fi blips happen at 4:30: try three times, 30 s then 90 s apart, then leave it to staff.
+      const n = (finalTries.get(t.id) || 0) + 1;
+      finalTries.set(t.id, n);
+      if (n >= 3) {
+        run('UPDATE submissions SET repo_final = 1, repo_error = ? WHERE team_id = ?', `Official freeze snapshot failed (${e.message}) Staff: use Re-snapshot repo.`, t.id);
+        finalTries.delete(t.id); finalRetryAt.delete(t.id);
+      } else finalRetryAt.set(t.id, Date.now() + (n === 1 ? 30000 : 90000));
+      console.log(`[freeze] final snapshot attempt ${n} failed for team ${t.name}: ${e.message}`);
     } finally { finalizing.delete(t.id); changed(t); }
-  }
+  };
+  const queue = [...due];
+  await Promise.all(Array.from({ length: Math.min(4, queue.length) }, async () => { while (queue.length) await one(queue.shift()); }));
 }
 async function adminSnapshot(teamId, userId) {
   const t = teamOr404(teamId);

@@ -1,5 +1,5 @@
 import { h, clear, toast, initials, fmtCountdown, fmtTime, ROLE_LABEL } from './ui.js';
-import { api } from './api.js';
+import { api, ApiError } from './api.js';
 
 export const state = { me: null, team: null, event: null, runner: null, github: false, offset: 0, socket: null };
 export const now = () => Date.now() + state.offset;
@@ -59,6 +59,9 @@ function navItems() {
 let menuOpen = false;
 export function renderChrome() {
   const bar = document.getElementById('topbar');
+  // The bar is rebuilt on live updates; keep keyboard focus where it was.
+  const a = document.activeElement;
+  const keep = a && bar.contains(a) ? (a.getAttribute('href') ? `[href="${a.getAttribute('href')}"]` : a.classList.contains('menu-btn') ? '.menu-btn' : a.dataset.key ? `[data-key="${a.dataset.key}"]` : null) : null;
   const cur = currentRoute().name;
   const items = navItems();
   const unread = chatUnread();
@@ -67,27 +70,33 @@ export function renderChrome() {
     h('a', { class: 'brand', href: '#/' }, h('span', { class: 'mark' }, '<H>'),
       h('span', { class: 'name' }, (state.event ? state.event.event_name : 'HAkrathon 2026').replace(/(\d{4})$/, ''), h('span', { class: 'year' }, ((state.event ? state.event.event_name : '2026').match(/\d{4}$/) || [''])[0]))),
     h('nav', { class: 'nav', 'aria-label': 'Main' }, items.map(([href, label, name]) =>
-      h('a', { href, class: cur === name ? 'active' : '', 'aria-current': cur === name ? 'page' : null }, label, name === 'chat' && unread ? h('span', { class: 'dot', title: 'New messages' }) : null))),
+      h('a', { href, class: cur === name ? 'active' : '', 'aria-current': cur === name ? 'page' : null }, label, name === 'chat' && unread ? [h('span', { class: 'dot', title: 'New messages', 'aria-hidden': 'true' }), h('span', { class: 'sr' }, ' (new messages)')] : null))),
     user ? h('div', { class: 'clock-pill', id: 'clock-pill', 'aria-live': 'off' }) : null,
     user ? h('div', { class: 'userbox' },
-      h('button', { class: 'menu-btn', 'aria-label': 'Account menu', 'aria-expanded': String(menuOpen), onclick: (e) => { e.stopPropagation(); menuOpen = !menuOpen; renderChrome(); } },
+      h('button', { class: 'menu-btn', 'aria-label': 'Account menu', 'aria-expanded': String(menuOpen), 'aria-controls': 'account-menu', onclick: (e) => {
+        e.stopPropagation(); menuOpen = !menuOpen; renderChrome();
+        if (menuOpen) document.querySelector('#account-menu a, #account-menu button')?.focus();
+      } },
         h('span', { class: 'avatar' }, initials(user.name)))) : null));
   if (user && menuOpen) {
-    bar.append(h('div', { class: 'dropdown', role: 'menu' },
+    bar.append(h('div', { class: 'dropdown', id: 'account-menu', onclick: (e) => e.stopPropagation(), onkeydown: (e) => {
+      if (e.key === 'Escape') { menuOpen = false; renderChrome(); document.querySelector('.menu-btn')?.focus(); }
+    }, onfocusout: (e) => { if (menuOpen && e.relatedTarget && !bar.contains(e.relatedTarget)) { menuOpen = false; renderChrome(); } } },
       h('div', { class: 'who' }, h('b', null, user.name), h('br'), user.email, h('br'), h('span', { class: `role-${user.role}` }, ROLE_LABEL[user.role]), state.team ? ` · ${state.team.name}` : ''),
-      h('a', { href: '#/profile', role: 'menuitem' }, 'Profile & password'),
-      h('a', { href: '#/teams', role: 'menuitem' }, 'All teams'),
-      h('button', { role: 'menuitem', onclick: logout }, 'Sign out')));
+      h('a', { href: '#/profile', onclick: () => { menuOpen = false; setTimeout(renderChrome); } }, 'Profile & password'),
+      h('a', { href: '#/teams', onclick: () => { menuOpen = false; setTimeout(renderChrome); } }, 'All teams'),
+      h('button', { 'data-key': 'signout', onclick: logout }, 'Sign out')));
   }
+  if (keep) bar.querySelector(keep)?.focus();
   tickClock();
   renderBanner();
 }
 document.addEventListener('click', () => { if (menuOpen) { menuOpen = false; renderChrome(); } });
 
 async function logout() {
+  dropSocket();
   try { await api.post('/api/auth/logout'); } catch {}
   state.me = null; state.team = null;
-  if (state.socket) { state.socket.disconnect(); state.socket = null; }
   location.hash = '#/login';
 }
 
@@ -114,7 +123,8 @@ function tickClock() {
   const n = nextMoment();
   if (!n) { clear(pill, h('span', null, fmtTime(new Date(now()).toISOString(), { second: undefined }))); pill.classList.remove('urgent'); return; }
   const left = n[0] - now();
-  clear(pill, h('span', { class: 'lbl' }, `${n[1]} in`), h('b', null, fmtCountdown(left)));
+  const short = { 'Checkpoint 1 due': 'CP1', 'Checkpoint 2 due': 'CP2', 'Build freeze': 'Freeze', 'Roster lock': 'Roster', 'Validation ends': 'Validation' }[n[1]] || n[1].split(/\s+/)[0];
+  clear(pill, h('span', { class: 'lbl' }, `${n[1]} in`), h('span', { class: 'lbl-s', 'aria-hidden': 'true' }, short), h('b', null, fmtCountdown(left)));
   pill.classList.toggle('urgent', left < 15 * 60000);
   pill.title = `${n[1]} at ${fmtTime(new Date(n[0]).toISOString())}`;
 }
@@ -126,7 +136,7 @@ function renderBanner() {
     const fz = freezeAt(), t = now();
     if (role() === 'participant' && state.team) {
       if (t >= fz) { key = 'frozen'; node = h('div', { class: 'banner freeze' }, 'Build freeze has passed. Code and submissions are locked.'); }
-      else if (fz - t < 15 * 60000) { key = 'soon'; node = h('div', { class: 'banner warn' }, `Build freeze at ${fmtTime(new Date(fz).toISOString())}. Upload everything and verify judge access now. No new features.`); }
+      else if (fz - t < 15 * 60000) { key = `soon:${fz}`; node = h('div', { class: 'banner warn' }, `Build freeze at ${fmtTime(new Date(fz).toISOString())}. Upload everything and verify judge access now. No new features.`); }
     }
     if (!key && state.event.is_demo) { key = 'demo'; node = h('div', { class: 'banner freeze' }, 'DEMO copy — not the real event. Nothing here is kept.'); }
     if (!key && role() === 'participant' && !state.team) { key = 'noteam'; node = h('div', { class: 'banner info' }, 'You are not on a team yet. ', h('a', { href: '#/team' }, 'Create or join one')); }
@@ -179,6 +189,19 @@ function connectSocket() {
     });
   }
   s.on('connect', () => { dispatch('reconnect', {}); });
+  // The server drops sockets on password change/reset, logout and disable, and Socket.IO does not
+  // retry after that. Start a fresh one if the session is still good.
+  s.on('disconnect', (reason) => {
+    if (reason !== 'io server disconnect') return;
+    if (state.socket === s) state.socket = null;
+    s.removeAllListeners();
+    setTimeout(() => { loadMe().then(() => { if (state.me) { connectSocket(); renderChrome(); } }).catch(() => {}); }, 500);
+  });
+}
+function dropSocket() {
+  const s = state.socket;
+  state.socket = null;
+  if (s) { s.removeAllListeners(); s.disconnect(); }
 }
 
 // ---------- router ----------
@@ -200,7 +223,7 @@ export async function route() {
   const main = document.getElementById('main');
   if (!state.me && r.name !== 'login') { location.hash = '#/login'; return; }
   if (state.me && r.name === 'login') { location.hash = '#/'; return; }
-  main.className = ['chat', 'workspace'].includes(r.name) ? 'full' : '';
+  main.className = ['chat', 'workspace', 'login'].includes(r.name) ? 'full' : '';
   clear(main, h('div', { class: 'loading' }, h('span', { class: 'spinner' }), ' Loading…'));
   renderChrome();
   try {
@@ -219,7 +242,9 @@ export async function route() {
 }
 
 window.addEventListener('hashchange', route);
-window.addEventListener('hak:unauthorized', () => { if (state.me) { state.me = null; toast('Your session ended. Please sign in again.', 'bad'); location.hash = '#/login'; } });
+// Any button whose request fails without its own handler still tells the person why.
+window.addEventListener('unhandledrejection', (e) => { if (e.reason instanceof ApiError && e.reason.status !== 401) { toast(e.reason.message, 'bad'); e.preventDefault(); } });
+window.addEventListener('hak:unauthorized', () => { dropSocket(); if (state.me) { state.me = null; toast('Your session ended. Please sign in again.', 'bad'); location.hash = '#/login'; } });
 
 export async function boot() {
   try { await loadMe(); } catch { /* offline handled below */ }

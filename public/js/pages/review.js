@@ -21,6 +21,8 @@ export async function render(route) {
   };
   await draw();
   on('submission:update', draw);
+  // Staff aren't in the team's room; they hear about this team's changes on the staff channel.
+  on('staff:update', (ev) => { if (ev && ev.kind === 'submission' && ev.teamId === teamId && !root.querySelector('textarea:focus, input:focus')) draw(); });
   return root;
 }
 
@@ -36,7 +38,7 @@ async function validationCard(teamId, s) {
     ['eligibility_ok', 'Roster eligible; no prohibited outside work'],
   ];
   const boxes = Object.fromEntries(checks.map(([k]) => [k, h('input', { type: 'checkbox', checked: !!v[k] })]));
-  const notes = h('textarea', { placeholder: 'Validation notes (internal)', maxlength: 1000 }, v.notes || '');
+  const notes = h('textarea', { 'aria-label': 'Validation notes (internal)', placeholder: 'Validation notes (internal)', maxlength: 1000 }, v.notes || '');
   return h('section', { class: 'card' },
     h('div', { class: 'card-head' }, h('h3', null, 'Staff validation'), checks.every(([k]) => v[k]) ? badge('Validated', 'ok') : badge('Pending', 'warn')),
     checks.map(([k, label]) => h('label', { class: 'check', style: { marginBottom: '8px' } }, boxes[k], h('span', null, label))),

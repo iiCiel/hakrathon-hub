@@ -32,6 +32,38 @@ function weightedTotal(sc) {
 }
 const round2 = (n) => Math.round(n * 100) / 100;
 
+// Ranking with tie-breakers within 0.25: impact → technical → innovation → judge vote.
+// Teams are grouped from the top: a group is the highest unplaced team plus every team within
+// 0.25 of it; inside a group the tie-breakers decide. This is a strict order, so the result
+// never depends on the order teams were created in.
+const TB = ['impact', 'technical', 'innovation'];
+function rankScored(list) {
+  const sorted = [...list].sort((a, b) => (b.average - a.average) || (a.team_id - b.team_id));
+  const groups = [];
+  for (const x of sorted) {
+    const g = groups[groups.length - 1];
+    if (g && g[0].average - x.average <= 0.25 + 1e-9) g.push(x); else groups.push([x]);
+  }
+  const inGroup = (a, b) => {
+    for (const k of TB) if (a.criteria[k] !== b.criteria[k]) return b.criteria[k] - a.criteria[k];
+    return (b.average - a.average) || (a.team_id - b.team_id);
+  };
+  const out = [];
+  for (const g of groups) {
+    g.sort(inGroup);
+    for (const x of g) {
+      for (const o of g) {
+        if (o === x) continue;
+        const decided = TB.find((k) => o.criteria[k] !== x.criteria[k]);
+        x.flags.push(decided ? `Within 0.25 of ${o.team}; tie-breaker: ${decided} average` : `Tied with ${o.team} on all tie-breakers: judge vote needed`);
+      }
+      out.push(x);
+    }
+  }
+  out.forEach((x, i) => { x.rank = i + 1; });
+  return out;
+}
+
 function tabulate() {
   const st = S.getSettings();
   const teams = all('SELECT * FROM teams ORDER BY id');
@@ -53,6 +85,8 @@ function tabulate() {
     const s = subRow(t.id);
     const comp = completeness(t, s, getCheckpoints(t.id));
     if (!comp.complete) flags.push('Submission package incomplete');
+    const members = get('SELECT COUNT(*) AS c FROM users WHERE team_id = ? AND disabled = 0', t.id).c;
+    if (members < st.team_min || members > st.team_max) flags.push(`Roster has ${members} member${members === 1 ? '' : 's'} (rule: ${st.team_min}–${st.team_max})`);
     const val = get('SELECT * FROM validations WHERE team_id = ?', t.id);
     const validated = !!(val && val.links_ok && val.video_ok && val.brief_ok && val.disclosure_ok && val.eligibility_ok);
     if (!validated) flags.push('Not fully validated by staff');
@@ -64,23 +98,7 @@ function tabulate() {
       flags, complete: comp.complete, validated,
     };
   });
-  // Ranking with tie-breakers within 0.25: impact → technical → innovation → judge vote.
-  const scored = rows.filter((x) => x.average != null);
-  const cmp = (a, b) => {
-    if (Math.abs(a.average - b.average) > 0.25) return b.average - a.average;
-    for (const k of ['impact', 'technical', 'innovation']) if (a.criteria[k] !== b.criteria[k]) return b.criteria[k] - a.criteria[k];
-    return b.average - a.average;
-  };
-  scored.sort(cmp);
-  scored.forEach((x, i) => {
-    x.rank = i + 1;
-    const next = scored[i + 1], prev = scored[i - 1];
-    for (const o of [prev, next]) {
-      if (!o || Math.abs(o.average - x.average) > 0.25) continue;
-      const decided = ['impact', 'technical', 'innovation'].find((k) => o.criteria[k] !== x.criteria[k]);
-      x.flags.push(decided ? `Within 0.25 of ${o.team}; tie-breaker: ${decided} average` : `Tied with ${o.team} on all tie-breakers: judge vote needed`);
-    }
-  });
+  const scored = rankScored(rows.filter((x) => x.average != null));
   const unscored = rows.filter((x) => x.average == null);
   const ranked = scored.concat(unscored);
 
@@ -135,6 +153,7 @@ r.put('/judge/scores/:teamId', wrap((req) => {
   if (!st.judging_open) throw new HttpError(403, 'Judging has not opened yet.');
   if (st.results_published) throw new HttpError(403, 'Results are published. Scores are locked.');
   if (get('SELECT 1 FROM conflicts WHERE judge_id = ? AND team_id = ?', u.id, t.id)) throw new HttpError(403, 'You declared a conflict with this team.');
+  if (!S.isFrozen(t)) throw new HttpError(403, 'This team has a time extension and is still building. Score it after it freezes.');
   const b = req.body || {};
   // Primary scorecards freeze once finalist Q&A opens (the top three were picked from them).
   if (st.finalists_open) {
@@ -143,6 +162,9 @@ r.put('/judge/scores/:teamId', wrap((req) => {
       : 'Primary judging is closed while finalist Q&A is open. Ask the scoring lead if a card is missing.');
   }
   const submit = !!b.submitted;
+  const prev = cardFor(u.id, t.id);
+  // A submitted card stays counted: saving it again must submit it (a "draft" save would quietly drop it from the tally).
+  if (prev && prev.submitted && !submit && !b.withdraw) throw new HttpError(400, 'This scorecard is already submitted. Use "Update scorecard" to save changes.');
   const vals = {};
   for (const k of CRIT) vals[k] = int(b[k], { min: 1, max: 10, name: k, nullable: !submit });
   const notes = {
@@ -214,4 +236,4 @@ r.get('/results', wrap((req) => {
   return { published: !!st.results_published, awards, feedback, criteria: st.criteria };
 }));
 
-module.exports = { router: r, tabulate, ANCHORS, CRIT, weightedTotal };
+module.exports = { router: r, tabulate, rankScored, ANCHORS, CRIT, weightedTotal };

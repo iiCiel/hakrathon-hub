@@ -12,9 +12,11 @@ export async function render(route) {
   const drawSide = () => {
     const groups = [['Event', channels.filter((c) => !c.team && c.id !== 'staff')], ['Staff', channels.filter((c) => c.id === 'staff')], ['Teams', channels.filter((c) => c.team)]];
     clear(side, groups.filter(([, list]) => list.length).map(([title, list]) => [h('h4', null, title),
-      list.map((c) => h('button', { class: `chan ${c.id === current ? 'on' : ''}`, onclick: () => go(`#/chat/${c.id}`) },
+      list.map((c) => h('button', { class: `chan ${c.id === current ? 'on' : ''}`, 'aria-current': c.id === current ? 'page' : null, onclick: () => go(`#/chat/${c.id}`) },
         c.id === 'announcements' ? '📣' : c.team ? '👥' : c.id === 'staff' ? '🔒' : '#', ' ', c.name,
-        c.id !== current && chatUnread(c.id) ? h('span', { class: 'unread' }, '•') : null))]));
+        c.id !== current && chatUnread(c.id) ? [h('span', { class: 'unread', 'aria-hidden': 'true' }, '•'), h('span', { class: 'sr' }, ' (new messages)')] : null))]));
+    // On phones the channels are one scrolling row: keep the open one in view.
+    requestAnimationFrame(() => { const on_ = side.querySelector('.chan.on'); if (on_ && side.scrollWidth > side.clientWidth) side.scrollLeft = on_.offsetLeft - (side.clientWidth - on_.offsetWidth) / 2; });
   };
 
   const list = h('div', { class: 'msgs', role: 'log', 'aria-live': 'polite', 'aria-label': `${chan.name} messages` });
@@ -28,7 +30,7 @@ export async function render(route) {
       !m.deleted && (m.user.id === state.me.id || role() === 'admin') ? h('button', { class: 'btn ghost sm', title: 'Delete', 'aria-label': 'Delete message', onclick: async () => {
         if (await confirmBox('Delete message?', 'This removes the message for everyone.', 'Delete', true)) api.del(`/api/chat/messages/${m.id}`).catch((e) => toast(e.message, 'bad'));
       } }, '🗑') : null,
-      !m.deleted && role() === 'admin' ? h('button', { class: 'btn ghost sm', title: m.pinned ? 'Unpin' : 'Pin', onclick: () => api.post(`/api/chat/messages/${m.id}/pin`, { pinned: !m.pinned }).catch((e) => toast(e.message, 'bad')) }, m.pinned ? '📌✕' : '📌') : null);
+      !m.deleted && role() === 'admin' ? h('button', { class: 'btn ghost sm', title: m.pinned ? 'Unpin' : 'Pin', 'aria-label': m.pinned ? 'Unpin message' : 'Pin message', onclick: () => api.post(`/api/chat/messages/${m.id}/pin`, { pinned: !m.pinned }).catch((e) => toast(e.message, 'bad')) }, m.pinned ? '📌✕' : '📌') : null);
     return h('div', { class: `msg ${cont ? 'cont' : ''} ${m.deleted ? 'deleted' : ''}`, 'data-id': m.id },
       h('span', { class: 'avatar', 'aria-hidden': 'true', style: m.user.role !== 'participant' ? { background: 'var(--navy)', color: '#fff' } : null }, initials(m.user.name)),
       h('div', null,
@@ -44,6 +46,15 @@ export async function render(route) {
     pins.hidden = !pinned.length;
     clear(pins, pinned.map((p) => h('div', null, '📌 ', h('b', null, p.user.name, ': '), p.body.length > 200 ? p.body.slice(0, 200) + '…' : p.body)));
     if (messages.length) { const last = messages[messages.length - 1].id; noteLatest(current, last); markSeen(current, last); renderChrome(); }
+  };
+  // New and edited messages change one node, so screen readers announce just that message.
+  const seen = () => { if (messages.length) { const last = messages[messages.length - 1].id; noteLatest(current, last); markSeen(current, last); renderChrome(); } };
+  const appendMsg = (m) => {
+    if (messages.length === 1 || !list.querySelector('.msg')) return drawMsgs(true);
+    const atBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 80;
+    list.append(msgNode(m, messages[messages.length - 2]));
+    if (atBottom || m.user.id === state.me.id) list.scrollTop = list.scrollHeight;
+    seen();
   };
   const load = async () => {
     const d = await api.get(`/api/chat/${encodeURIComponent(current)}`);
@@ -62,14 +73,14 @@ export async function render(route) {
         ? await api.post('/api/admin/announce', { body })
         : await api.post(`/api/chat/${encodeURIComponent(current)}`, { body });
       input.value = '';
-      if (!messages.some((m) => m.id === message.id)) { messages.push(message); drawMsgs(true); }
+      if (!messages.some((m) => m.id === message.id)) { messages.push(message); appendMsg(message); }
     } catch (e) { toast(e.message, 'bad'); }
     input.disabled = false; input.focus();
   };
   input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); } });
 
   on('chat:message', (m) => {
-    if (m.channel === current) { if (!messages.some((x) => x.id === m.id)) { messages.push(m); drawMsgs(false); } }
+    if (m.channel === current) { if (!messages.some((x) => x.id === m.id)) { messages.push(m); appendMsg(m); } }
     else drawSide();
   });
   on('chat:update', (m) => {
@@ -77,7 +88,12 @@ export async function render(route) {
     const i = messages.findIndex((x) => x.id === m.id);
     if (i >= 0) messages[i] = m;
     pinned = messages.filter((x) => x.pinned && !x.deleted).reverse().concat(pinned.filter((p) => !messages.some((x) => x.id === p.id) && p.id !== m.id)).slice(0, 10);
-    drawMsgs(false);
+    const node = list.querySelector(`.msg[data-id="${m.id}"]`);
+    if (node && i >= 0) {
+      node.replaceWith(msgNode(m, messages[i - 1]));
+      pins.hidden = !pinned.length;
+      clear(pins, pinned.map((p) => h('div', null, '📌 ', h('b', null, p.user.name, ': '), p.body.length > 200 ? p.body.slice(0, 200) + '…' : p.body)));
+    } else drawMsgs(false);
   });
   on('reconnect', load);
 

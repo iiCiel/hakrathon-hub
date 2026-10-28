@@ -265,7 +265,9 @@ function getCheckpoints(teamId) {
   const out = {};
   for (const row of all('SELECT * FROM checkpoints WHERE team_id = ?', teamId)) {
     out[row.kind] = { data: JSON.parse(row.data), submitted_at: row.submitted_at, late: !!row.late,
-      submitted_by: (get('SELECT name FROM users WHERE id = ?', row.submitted_by) || {}).name || '' };
+      submitted_by: (get('SELECT name FROM users WHERE id = ?', row.submitted_by) || {}).name || '',
+      updated_at: row.updated_at && row.updated_at !== row.submitted_at ? row.updated_at : '',
+      updated_by: row.updated_by ? (get('SELECT name FROM users WHERE id = ?', row.updated_by) || {}).name || '' : '' };
   }
   return out;
 }
@@ -288,11 +290,15 @@ r.put('/teams/mine/checkpoints/:kind', wrap((req) => {
   if (kind === 'cp1' && !t.lane) throw new HttpError(400, 'Pick your team lane first (Team page).');
   const s = S.getSettings();
   const late = Date.now() > Date.parse(kind === 'cp1' ? s.cp1_at : s.cp2_at) + 60000 ? 1 : 0;
-  run(`INSERT INTO checkpoints (team_id, kind, data, submitted_by, submitted_at, late) VALUES (?,?,?,?,?,?)
-       ON CONFLICT(team_id, kind) DO UPDATE SET data = excluded.data, submitted_by = excluded.submitted_by,
-       submitted_at = excluded.submitted_at, late = MAX(checkpoints.late, excluded.late)`,
-  t.id, kind, JSON.stringify(data), u.id, now(), late);
-  run('INSERT INTO submission_log (team_id, user_id, action, detail) VALUES (?,?,?,?)', t.id, u.id, `checkpoint.${kind}`, late ? 'late' : '');
+  // The first submission sets the time and the late flag; later edits only change the content
+  // (and are logged), so fixing a typo after the deadline doesn't turn an on-time checkpoint late.
+  const had = get('SELECT late FROM checkpoints WHERE team_id = ? AND kind = ?', t.id, kind);
+  const ts = now();
+  run(`INSERT INTO checkpoints (team_id, kind, data, submitted_by, submitted_at, late, updated_at, updated_by) VALUES (?,?,?,?,?,?,?,?)
+       ON CONFLICT(team_id, kind) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at, updated_by = excluded.updated_by`,
+  t.id, kind, JSON.stringify(data), u.id, ts, late, ts, u.id);
+  run('INSERT INTO submission_log (team_id, user_id, action, detail) VALUES (?,?,?,?)', t.id, u.id, had ? `checkpoint.${kind}.edit` : `checkpoint.${kind}`,
+    had ? (late ? 'edited after the deadline' : '') : (late ? 'late' : ''));
   bus.emit(`team:${t.id}`, 'team:update', {});
   bus.emit('staff', 'staff:update', { kind: 'checkpoint' });
   return { checkpoints: getCheckpoints(t.id) };

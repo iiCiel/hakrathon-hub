@@ -1,6 +1,6 @@
 import { h, clear, toast, promptBox, confirmBox, initials, badge } from '../ui.js';
 import { api } from '../api.js';
-import { state, on, onLeave, role, go } from '../app.js';
+import { state, on, onLeave, role, go, freezeAt, route } from '../app.js';
 import { loadMonaco, monacoLang, darkMode } from '../monaco.js';
 
 const RUN_EXT = { py: 'python', js: 'javascript', mjs: 'javascript', c: 'c', cpp: 'cpp', cc: 'cpp', java: 'java', sh: 'bash' };
@@ -8,7 +8,7 @@ const RUN_EXT = { py: 'python', js: 'javascript', mjs: 'javascript', c: 'c', cpp
 export async function render(route) {
   const teamId = Number(route.params[0]) || (state.team && state.team.id);
   if (!teamId) {
-    if (role() === 'participant') return h('main', { class: 'card empty', style: { margin: '24px' } }, h('div', { class: 'big' }, '👥'), h('p', null, 'Join a team to get a shared workspace.'), h('a', { class: 'btn', href: '#/team' }, 'Team page'));
+    if (role() === 'participant') return h('div', { class: 'card empty', style: { margin: '24px' } }, h('div', { class: 'big' }, '👥'), h('p', null, 'Join a team to get a shared workspace.'), h('a', { class: 'btn', href: '#/team' }, 'Team page'));
     go('#/teams'); return h('div');
   }
   const [meta, all, monaco] = await Promise.all([api.get(`/api/workspace/${teamId}/files`), api.get(`/api/workspace/${teamId}/all`), loadMonaco()]);
@@ -39,8 +39,9 @@ export async function render(route) {
   const output = h('pre', { class: 'output', 'aria-live': 'polite' }, h('span', { class: 'sys' }, 'Output appears here. Ctrl+Enter runs your code.'));
   const langSel = h('select', { 'aria-label': 'Language' }, Object.entries(state.runner.langs).map(([k, v]) => h('option', { value: k }, v.name)));
   const entrySel = h('select', { 'aria-label': 'Entry file' });
-  const stdin = h('textarea', { placeholder: 'Program input (stdin), optional', style: { minHeight: '60px', fontFamily: 'var(--mono)', fontSize: '.85rem' } });
+  const stdin = h('textarea', { 'aria-label': 'Program input (stdin)', placeholder: 'Program input (stdin), optional', style: { minHeight: '60px', fontFamily: 'var(--mono)', fontSize: '.85rem' } });
   const runBtn = h('button', { class: 'btn', onclick: () => runCode() }, '▶ Run ', h('span', { class: 'kbd' }, 'Ctrl+↵'));
+  const kbdHint = h('div', { class: 'faint', style: { marginTop: '4px' } }, 'In the editor, Tab indents. Press Ctrl+M first to make Tab move focus out.');
   const runnerNote = h('div', { class: 'faint', style: { marginTop: '6px' } });
 
   const editor = monaco.editor.create(editorEl, {
@@ -50,19 +51,38 @@ export async function render(route) {
   });
   editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => runCode());
   editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => { const f = files.get(current); if (f) save(f); });
-  onLeave(() => { editor.dispose(); for (const f of files.values()) { clearTimeout(f.timer); f.model.dispose(); } });
+  // Leaving the page: send every unsaved file first (content is read now, the request finishes on
+  // its own), then free the editor. One handler so the order can't flip.
+  let left = false;
+  onLeave(() => {
+    left = true;
+    window.removeEventListener('beforeunload', unloadGuard);
+    for (const f of files.values()) {
+      clearTimeout(f.timer);
+      if (canWrite && !f.conflict && f.model.getValue() !== f.saved) {
+        // A save already in flight bumped the version; ours carries the newest text, so force it.
+        api.put(`/api/workspace/${teamId}/file`, { path: f.path, content: f.model.getValue(), baseVersion: f.version, force: f.saving })
+          .then((r) => { if (r && r.conflict) toast(`${f.path}: a teammate saved a newer version, so your last edits were not saved.`, 'bad', 10000); })
+          .catch((e) => toast(`${f.path} was not saved: ${e.message}`, 'bad', 10000));
+      }
+    }
+    editor.dispose();
+    for (const f of files.values()) f.model.dispose();
+  });
 
   // ---- drawing ----
   function drawFiles() {
     const now_ = Date.now();
+    const focusedPath = fileList.contains(document.activeElement) ? document.activeElement.dataset.path : null;
     clear(fileList, [...files.keys()].sort().map((p) => {
       const f = files.get(p);
       const viewers = [...presence.values()].filter((x) => x.path === p && x.id !== state.me.id && now_ - x.at < 60000);
-      return h('div', { class: `file ${p === current ? 'on' : ''}`, role: 'option', 'aria-selected': String(p === current), tabindex: 0,
-        onclick: () => open(p), onkeydown: (e) => { if (e.key === 'Enter') open(p); } },
+      return h('div', { class: `file ${p === current ? 'on' : ''}`, role: 'option', 'aria-selected': String(p === current), tabindex: 0, 'data-path': p,
+        onclick: () => open(p), onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(p); } } },
       h('span', null, p), dirty(f) ? h('span', { class: 'dirty', title: 'Unsaved' }, '●') : null, f.conflict ? h('span', { title: 'Conflict' }, '⚠') : null,
       h('span', { class: 'who' }, viewers.map((v) => h('i', { title: `${v.name} is here` }, initials(v.name)))));
     }));
+    if (focusedPath) [...fileList.children].find((el) => el.dataset.path === focusedPath)?.focus();
   }
   function drawBar() {
     const f = current && files.get(current);
@@ -121,6 +141,7 @@ export async function render(route) {
       if (e.status === 403) { canWrite = false; editor.updateOptions({ readOnly: true }); }
     }
     f.saving = false;
+    if (left) return;
     drawBar(); drawFiles();
     if (dirty(f) && !f.conflict) scheduleSave(f);
   }
@@ -136,7 +157,11 @@ export async function render(route) {
     if (ev.teamId !== teamId || (ev.by && ev.by.id === state.me.id && !ev.renamed && !ev.deleted)) return;
     if (ev.deleted) {
       const f = files.get(ev.path);
-      if (f) { f.model.dispose(); files.delete(ev.path); if (current === ev.path) { current = [...files.keys()][0] || null; editor.setModel(current ? files.get(current).model : null); } }
+      if (f && dirty(f)) {
+        navigator.clipboard?.writeText(f.model.getValue()).catch(() => {});
+        toast(`${ev.by.name} deleted ${ev.path} while you had unsaved edits. Your text was copied to the clipboard (if the browser allowed it).`, 'bad', 12000);
+      }
+      if (f) { clearTimeout(f.timer); f.model.dispose(); files.delete(ev.path); if (current === ev.path) { current = [...files.keys()][0] || null; editor.setModel(current ? files.get(current).model : null); } }
       toast(`${ev.by.name} deleted ${ev.path}`);
     } else if (ev.renamed) {
       const f = files.get(ev.from);
@@ -163,15 +188,21 @@ export async function render(route) {
   const pt = setInterval(sendPresence, 20000);
   onLeave(() => { clearInterval(pt); if (state.socket) state.socket.emit('presence', { teamId, path: '' }); });
   on('reconnect', sendPresence);
-  // Freeze happens on the clock; flip to read-only when it passes.
+  // Freeze happens on the clock; flip to read-only when it passes. freezeAt() follows extensions
+  // (it is refreshed on team/event updates), so an extension keeps or re-opens the workspace.
+  const member = mine && role() === 'participant';
   on('tick', (t) => {
-    if (canWrite && role() !== 'admin' && t >= new Date(meta.freeze_at).getTime()) {
+    if (!member) return;
+    const open_ = t < freezeAt();
+    if (canWrite && !open_) {
       canWrite = false; editor.updateOptions({ readOnly: true }); drawBar(); toast('Build freeze: the workspace is now read-only.', 'bad', 10000);
+    } else if (!canWrite && open_) {
+      toast('Your team got more time: the workspace is open again.', 'ok', 8000);
+      route(); // redraw with the editing tools
     }
   });
   const unloadGuard = (e) => { if ([...files.values()].some(dirty)) { e.preventDefault(); e.returnValue = ''; } };
   window.addEventListener('beforeunload', unloadGuard);
-  onLeave(() => { window.removeEventListener('beforeunload', unloadGuard); for (const f of files.values()) if (dirty(f)) save(f); });
 
   // ---- file ops ----
   async function newFile() {
@@ -211,7 +242,8 @@ export async function render(route) {
   const importInput = h('input', { type: 'file', multiple: true, hidden: true, onchange: async () => {
     for (const file of importInput.files) {
       if (file.size > 512 * 1024) { toast(`${file.name} is over 512 KB. Use GitHub for big files.`, 'bad'); continue; }
-      const text = await file.text();
+      let text = await file.text();
+      if (/\.sh$/i.test(file.name)) text = text.replace(/\r\n/g, '\n'); // bash in the sandbox needs LF
       if (text.includes('\u0000')) { toast(`${file.name} looks binary; skipped.`, 'bad'); continue; }
       try {
         const r = await api.put(`/api/workspace/${teamId}/file`, { path: file.name, content: text });
@@ -265,6 +297,6 @@ export async function render(route) {
         h('div', { class: 'row', style: { flexWrap: 'nowrap' } }, langSel, entrySel),
         h('div', { style: { marginTop: '8px' } }, stdin),
         h('div', { class: 'row between', style: { marginTop: '8px' } }, runBtn, h('button', { class: 'btn ghost sm', onclick: () => clear(output) }, 'Clear')),
-        runnerNote),
+        runnerNote, kbdHint),
       output));
 }

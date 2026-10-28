@@ -1,6 +1,6 @@
 import { h, clear, field, toast, formData, busy, fmtAgo, fmtTime, badge, modal } from '../ui.js';
 import { api } from '../api.js';
-import { state, on, role, now } from '../app.js';
+import { state, on, role, now, frozen } from '../app.js';
 
 const STATUS = { open: ['Waiting', 'warn'], claimed: ['Mentor on the way', 'blue'], resolved: ['Resolved', 'ok'], cancelled: ['Cancelled', ''] };
 
@@ -24,7 +24,8 @@ async function participantView() {
   await draw();
   on('help:update', draw);
   if (!state.team) return h('div', { class: 'card empty' }, 'Join a team to request a mentor.');
-  const form = h('form', { class: 'card', onsubmit: async (e) => {
+  const form = frozen() ? h('section', { class: 'card' }, h('h2', null, 'Ask for a mentor'),
+    h('p', null, 'Mentor requests closed at build freeze. If you need something now, ask event staff at the help desk.')) : h('form', { class: 'card', onsubmit: async (e) => {
     e.preventDefault();
     const btn = form.querySelector('button');
     busy(btn, true, 'Sending…');
@@ -34,8 +35,9 @@ async function participantView() {
   } },
   h('h2', null, 'Ask for a mentor'),
   h('p', { class: 'faint' }, 'Mentors ask diagnostic questions, suggest documentation or architecture options, and help you get unstuck. They advise; they do not build.'),
-  field('Type of help', h('div', { class: 'seg', role: 'radiogroup' }, Object.entries({ technical: 'Technical', business: 'Problem / business', presentation: 'Presentation' }).map(([k, v], i) =>
-    h('label', { style: { display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 12px', cursor: 'pointer' } }, h('input', { type: 'radio', name: 'kind', value: k, checked: i === 0 }), v)))),
+  h('fieldset', { class: 'field', style: { border: 0, padding: 0, margin: '0 0 12px', minWidth: 0 } }, h('legend', { style: { fontWeight: 600, fontSize: '.88rem', marginBottom: '5px', padding: 0 } }, 'Type of help'),
+    h('div', { class: 'seg' }, Object.entries({ technical: 'Technical', business: 'Problem / business', presentation: 'Presentation' }).map(([k, v], i) =>
+      h('label', { style: { display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 12px', cursor: 'pointer' } }, h('input', { type: 'radio', name: 'kind', value: k, checked: i === 0 }), v)))),
   field('What do you need?', h('textarea', { name: 'summary', required: true, maxlength: 500, placeholder: 'e.g. Our Flask app can’t read the CSV after deploying — getting a FileNotFoundError.' })),
   h('button', { class: 'btn', type: 'submit' }, 'Request mentor'));
   return h('div', null,
@@ -53,8 +55,8 @@ async function mentorView() {
     const shown = filter === 'active' ? active : done;
     clear(root,
       h('div', { class: 'row' }, h('div', { class: 'seg' },
-        h('button', { class: filter === 'active' ? 'on' : '', onclick: () => { filter = 'active'; draw(); } }, `Active (${active.length})`),
-        h('button', { class: filter === 'done' ? 'on' : '', onclick: () => { filter = 'done'; draw(); } }, `Mentor log (${done.length})`)),
+        h('button', { class: filter === 'active' ? 'on' : '', 'aria-pressed': String(filter === 'active'), onclick: () => { filter = 'active'; draw(); } }, `Active (${active.length})`),
+        h('button', { class: filter === 'done' ? 'on' : '', 'aria-pressed': String(filter === 'done'), onclick: () => { filter = 'done'; draw(); } }, `Mentor log (${done.length})`)),
       role() === 'admin' ? h('a', { class: 'btn secondary sm', href: '/api/admin/export/mentor-log.csv' }, 'Export mentor log') : null),
       shown.length ? h('div', { class: 'grid two' }, shown.map((r) => card(r, d.kinds, draw)))
         : h('div', { class: 'card empty' }, h('div', { class: 'big' }, filter === 'active' ? '✅' : '📒'), filter === 'active' ? 'No teams waiting. Nice.' : 'No resolved requests yet.'));

@@ -63,7 +63,7 @@ function seed() {
   run('INSERT INTO files (team_id, path, content) VALUES (?,?,?)', t1, 'README.md', '# ZipQueue\n\nWalk-in advising queue for the College of Business.\n');
   run("INSERT INTO invites (code, role, max_uses, note) VALUES ('DEMO-STUDENT', 'participant', 100, 'Demo participant code')");
   const ann = get("SELECT id FROM users WHERE role = 'admin'").id;
-  run("INSERT INTO messages (channel, user_id, body) VALUES ('announcements', ?, ?)", ann, 'Welcome to HAkrathon 2026! Checkpoint 2 is at 3:00. Mentors are at the help desk; request one from the **Mentors** tab.');
+  run("INSERT INTO messages (channel, user_id, body) VALUES ('announcements', ?, ?)", ann, 'Welcome to HAkrathon 2026! Checkpoint 2 is due at 3:15. Mentors are at the help desk; request one from the **Mentors** tab.');
   run("INSERT INTO messages (channel, user_id, body) VALUES ('general', ?, ?)", get("SELECT id FROM users WHERE email = 'student1@zips.uakron.edu'").id, 'Anyone know if the Wi-Fi blocks port 5000? Our Flask app works with:\n```python\napp.run(host="0.0.0.0", port=8080)\n```');
 }
 

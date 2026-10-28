@@ -38,9 +38,23 @@ export function toast(msg, kind = '', ms = 4500) {
 
 export function modal(title, body, actions = []) {
   return new Promise((resolve) => {
-    const close = (v) => { back.remove(); document.removeEventListener('keydown', onKey); resolve(v); };
-    const onKey = (e) => { if (e.key === 'Escape') close(null); };
-    const box = h('div', { class: 'modal', role: 'dialog', 'aria-modal': 'true', 'aria-label': title }, h('h2', null, title), body,
+    const opener = document.activeElement;
+    const close = (v) => {
+      back.remove(); document.removeEventListener('keydown', onKey); resolve(v);
+      if (opener && opener.isConnected && typeof opener.focus === 'function') opener.focus(); // give focus back
+    };
+    const onKey = (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); close(null); return; }
+      if (e.key !== 'Tab') return;
+      // Keep Tab inside the dialog.
+      const items = [...box.querySelectorAll('a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])')];
+      if (!items.length) return;
+      const first = items[0], last = items[items.length - 1];
+      if (e.shiftKey && (document.activeElement === first || !box.contains(document.activeElement))) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && (document.activeElement === last || !box.contains(document.activeElement))) { e.preventDefault(); first.focus(); }
+    };
+    const titleId = `dlg-${Math.random().toString(36).slice(2, 8)}`;
+    const box = h('div', { class: 'modal', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': titleId }, h('h2', { id: titleId }, title), body,
       h('div', { class: 'row end', style: { marginTop: '16px' } },
         actions.map((a) => h('button', { class: `btn ${a.class || ''}`, onclick: async () => {
           if (a.handler) { try { const r = await a.handler(); if (r === false) return; close(r ?? a.value); } catch (e) { toast(e.message, 'bad'); } }
@@ -142,7 +156,10 @@ export function highlightCode(code, path) {
 }
 
 export function badge(text, kind = '') { return h('span', { class: `badge ${kind}` }, text); }
-export function tick(ok, kind) { return h('span', { class: `tick ${kind || (ok ? 'ok' : 'no')}`, 'aria-hidden': 'true' }, ok ? '✓' : kind === 'warn' ? '!' : ''); }
+export function tick(ok, kind) {
+  const said = kind === 'warn' ? 'Needs attention: ' : ok ? 'Done: ' : kind === 'opt' ? 'Optional, not done: ' : 'Missing: ';
+  return [h('span', { class: `tick ${kind || (ok ? 'ok' : 'no')}`, 'aria-hidden': 'true' }, ok ? '✓' : kind === 'warn' ? '!' : ''), h('span', { class: 'sr' }, said)];
+}
 export const ROLE_LABEL = { admin: 'Event staff', judge: 'Judge', mentor: 'Mentor', participant: 'Participant' };
 export function field(label, input, hint) { return h('label', { class: 'field' }, h('span', null, label), input, hint ? h('small', null, hint) : null); }
 

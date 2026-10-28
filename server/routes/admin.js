@@ -1,10 +1,13 @@
 'use strict';
 const express = require('express');
+const fs = require('node:fs');
+const path = require('node:path');
 const { get, all, run, tx, audit } = require('../db');
 const A = require('../auth');
 const S = require('../settings');
 const runner = require('../runner');
 const source = require('../source');
+const offline = require('../offline');
 const { teamPublic, getCheckpoints, emailAllowed } = require('./core');
 const { postMessage } = require('./chat');
 const { completeness, subRow, adminSnapshot } = require('./submit');
@@ -281,6 +284,28 @@ const csvCell = (v) => {
   return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 };
 const toCsv = (rows, cols) => [cols.join(','), ...rows.map((r2) => cols.map((c) => csvCell(r2[c])).join(','))].join('\r\n');
+// Offline judging package (if the network dies): a folder of static pages to copy to a USB stick.
+r.get('/admin/offline-package', wrap(() => offline.info()));
+r.post('/admin/offline-package', wrap(async (req) => {
+  const out = await offline.buildOnce();
+  audit(req.user.id, 'offline.build', { teams: out.teams });
+  return out;
+}));
+r.get('/admin/offline/*', (req, res, next) => {
+  try {
+    const rel = String(req.params[0] || 'index.html');
+    const file = path.resolve(offline.OUT, rel);
+    if (!file.startsWith(path.resolve(offline.OUT) + path.sep) || !fs.existsSync(file) || !fs.statSync(file).isFile()) throw new HttpError(404, 'Not built yet. Press Build.');
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; img-src 'self' https: data:; media-src 'self'; frame-ancestors 'self'");
+    // Team-supplied files (anything under source/) are shown as text, never rendered as pages.
+    const teamFile = rel.split('/').includes('source');
+    if (teamFile ? !/\.(png|jpe?g|gif|webp)$/i.test(file) : !/\.(html|png|jpe?g|gif|webp|mp4|webm|mov|m4v|pdf|docx|zip)$/i.test(file)) res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.sendFile(file, (err) => { if (err && !res.headersSent) next(err); });
+  } catch (e) { next(e); }
+});
+
 r.get('/admin/export/:what', (req, res, next) => {
   try {
     let rows, cols;

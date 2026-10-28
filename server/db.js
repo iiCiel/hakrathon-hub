@@ -199,6 +199,8 @@ function addColumn(table, col, def) {
   if (!db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${def}`);
 }
 addColumn('invites', 'email', "TEXT DEFAULT ''");
+addColumn('checkpoints', 'updated_at', "TEXT DEFAULT ''");
+addColumn('checkpoints', 'updated_by', 'INTEGER');
 
 const stmtCache = new Map();
 function prep(sql) {

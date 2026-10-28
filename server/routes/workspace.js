@@ -154,7 +154,8 @@ r.post('/run', wrap(async (req) => {
   if (b.files && typeof b.files === 'object') {
     const keys = Object.keys(b.files);
     if (keys.length > MAX_FILES) throw new HttpError(400, 'Too many files.');
-    for (const k of keys) files[k] = String(b.files[k] ?? '');
+    // Scripts saved on Windows carry CRLF, which bash in the Linux sandbox can't run ($'\r').
+    for (const k of keys) files[k] = /\.sh$/i.test(k) ? String(b.files[k] ?? '').replace(/\r\n/g, '\n') : String(b.files[k] ?? '');
   }
   if (!(entry in files)) throw new HttpError(400, `Entry file ${entry} is missing.`);
   const started = Date.now();

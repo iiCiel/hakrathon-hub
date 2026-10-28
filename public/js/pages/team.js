@@ -4,17 +4,17 @@ import { state, loadMe, renderChrome, route, now, on, role, frozen, go } from '.
 
 const CP = {
   cp1: { title: 'Checkpoint 1 · Problem statement', due: () => state.event.cp1_at, fields: [
-    ['user', 'Primary user', 'Who specifically experiences the problem? (a College of Business user)', false],
-    ['problem', 'One-sentence problem', 'What happens today, and why is it worth fixing?', true],
-    ['outcome', 'Proposed outcome', 'What should be faster, safer, easier, more accessible, or more effective?', true],
-    ['evidence', 'Evidence', 'Observation, public data, interview insight, or reasonable assumption that supports the need.', true],
-    ['success', 'Success measure', 'What result would show that the solution works?', false],
-    ['tech', 'Planned technology', 'Languages, frameworks, data, AI tools you plan to use.', true],
+    ['user', 'Primary user', 'Who specifically experiences the problem? (a College of Business user)', false, 400],
+    ['problem', 'One-sentence problem', 'What happens today, and why is it worth fixing?', true, 600],
+    ['outcome', 'Proposed outcome', 'What should be faster, safer, easier, more accessible, or more effective?', true, 600],
+    ['evidence', 'Evidence', 'Observation, public data, interview insight, or reasonable assumption that supports the need.', true, 800],
+    ['success', 'Success measure', 'What result would show that the solution works?', false, 400],
+    ['tech', 'Planned technology', 'Languages, frameworks, data, AI tools you plan to use.', true, 600],
   ] },
   cp2: { title: 'Checkpoint 2 · Demo plan', due: () => state.event.cp2_at, fields: [
-    ['core', 'Working core (optional note)', 'What did you show your mentor?', false],
-    ['blockers', 'Blockers (optional)', 'Anything stopping you right now?', true],
-    ['demo1', 'Demo plan · bullet 1', '', false], ['demo2', 'Demo plan · bullet 2', '', false], ['demo3', 'Demo plan · bullet 3', '', false],
+    ['core', 'Working core (optional note)', 'What did you show your mentor?', false, 400],
+    ['blockers', 'Blockers (optional)', 'Anything stopping you right now?', true, 800],
+    ['demo1', 'Demo plan · bullet 1', '', false, 300], ['demo2', 'Demo plan · bullet 2', '', false, 300], ['demo3', 'Demo plan · bullet 3', '', false, 300],
   ] },
 };
 
@@ -25,7 +25,22 @@ export async function render() {
   const root = h('div');
   const draw = async () => {
     const cps = (await api.get('/api/teams/mine/checkpoints')).checkpoints;
+    // A teammate's change redraws the page; keep whatever this person was typing in a checkpoint.
+    const keep = {};
+    for (const f of root.querySelectorAll('form[data-kind]')) if (f.dataset.dirty) keep[f.dataset.kind] = formData(f);
+    const a = document.activeElement;
+    const focus = a && root.contains(a) && a.form && a.form.dataset.kind ? { kind: a.form.dataset.kind, name: a.name, pos: a.selectionStart } : null;
     clear(root, teamView(cps, draw));
+    for (const [kind, vals] of Object.entries(keep)) {
+      const f = root.querySelector(`form[data-kind="${kind}"]`);
+      if (!f) continue;
+      for (const [k, v] of Object.entries(vals)) if (f.elements[k] && !f.elements[k].disabled) f.elements[k].value = v;
+      f.dataset.dirty = '1';
+    }
+    if (focus) {
+      const el = root.querySelector(`form[data-kind="${focus.kind}"]`)?.elements[focus.name];
+      if (el) { el.focus(); try { el.setSelectionRange(focus.pos, focus.pos); } catch {} }
+    }
   };
   await draw();
   on('team:update', async () => { await loadMe(); if (!state.team) return route(); draw(); });
@@ -110,19 +125,21 @@ function cpForm(kind, existing, isFrozen, redraw) {
   const spec = CP[kind];
   const data = existing ? existing.data : {};
   const due = new Date(spec.due());
-  const form = h('form', { class: 'card', onsubmit: async (e) => {
+  const form = h('form', { class: 'card', 'data-kind': kind, oninput: () => { form.dataset.dirty = '1'; }, onsubmit: async (e) => {
     e.preventDefault();
     const btn = form.querySelector('button[type=submit]');
     busy(btn, true, 'Submitting…');
-    try { await api.put(`/api/teams/mine/checkpoints/${kind}`, formData(form)); toast(`${spec.title.split(' · ')[0]} submitted.`, 'ok'); redraw(); }
+    try { await api.put(`/api/teams/mine/checkpoints/${kind}`, formData(form)); delete form.dataset.dirty; toast(`${spec.title.split(' · ')[0]} submitted.`, 'ok'); redraw(); }
     catch (ex) { toast(ex.message, 'bad'); busy(btn, false); }
   } },
   h('div', { class: 'card-head' }, h('h2', null, spec.title),
     existing ? badge(existing.late ? `Submitted late · ${fmtTime(existing.submitted_at)}` : `Submitted ${fmtTime(existing.submitted_at)}`, existing.late ? 'warn' : 'ok')
       : badge(`Due ${fmtTime(due.toISOString())}`, now() > due.getTime() ? 'bad' : 'blue')),
-  existing ? h('p', { class: 'faint' }, `Last submitted by ${existing.submitted_by} at ${fmtDateTime(existing.submitted_at)}. You can update it until build freeze.`) : null,
-  spec.fields.map(([k, label, hint, multi]) => field(label,
-    multi ? h('textarea', { name: k, disabled: isFrozen, maxlength: 800 }, data[k] || '') : h('input', { type: 'text', name: k, value: data[k] || '', disabled: isFrozen, maxlength: 600 }), hint)),
+  existing ? h('p', { class: 'faint' }, `Submitted by ${existing.submitted_by} at ${fmtDateTime(existing.submitted_at)}.`,
+    existing.updated_at ? ` Last edited by ${existing.updated_by || 'a teammate'} at ${fmtDateTime(existing.updated_at)}.` : '',
+    ' You can edit it until build freeze; edits keep the original submission time.') : null,
+  spec.fields.map(([k, label, hint, multi, max]) => field(label,
+    multi ? h('textarea', { name: k, disabled: isFrozen, maxlength: max }, data[k] || '') : h('input', { type: 'text', name: k, value: data[k] || '', disabled: isFrozen, maxlength: max }), hint)),
   h('div', { class: 'row end' }, h('button', { class: 'btn', type: 'submit', disabled: isFrozen }, existing ? 'Update' : 'Submit checkpoint')));
   return form;
 }

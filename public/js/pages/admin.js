@@ -10,7 +10,7 @@ export async function render(route) {
   const body = await ({ overview, event: eventTab, people, codes, scoring, audit })[tab]();
   return h('div', null,
     h('div', { class: 'page-head' }, h('div', null, h('h1', null, 'Admin'), h('p', null, `${state.event.event_name} · event staff controls`))),
-    h('nav', { class: 'tabs' }, TABS.map(([k, label]) => h('a', { href: `#/admin/${k}`, class: k === tab ? 'on' : '' }, label))),
+    h('nav', { class: 'tabs' }, TABS.map(([k, label]) => h('a', { href: `#/admin/${k}`, class: k === tab ? 'on' : '', 'aria-current': k === tab ? 'page' : null }, label))),
     body);
 }
 
@@ -59,12 +59,33 @@ async function overview() {
         h('p', { class: 'faint' }, 'Use for team matching. Assign them from here or the People tab.'),
         h('table', { class: 'tbl' }, h('tbody', null, d.unassigned.map((u) => h('tr', null, h('td', null, h('b', null, u.name), h('div', { class: 'faint' }, u.email)),
           h('td', null, u.preferred_role || '—', h('div', { class: 'faint' }, u.major)), h('td', { class: 'faint' }, u.skills),
-          h('td', null, h('select', { onchange: async (e) => { if (!e.target.value) return; try { await api.patch(`/api/admin/users/${u.id}`, { team_id: Number(e.target.value) }); toast(`${u.name} assigned.`, 'ok'); draw(); } catch (ex) { toast(ex.message, 'bad'); } } },
+          h('td', null, h('select', { 'aria-label': `Assign ${u.name} to a team`, onchange: async (e) => { if (!e.target.value) return; try { await api.patch(`/api/admin/users/${u.id}`, { team_id: Number(e.target.value) }); toast(`${u.name} assigned.`, 'ok'); draw(); } catch (ex) { toast(ex.message, 'bad'); } } },
             h('option', { value: '' }, 'Assign to…'), d.teams.map((t) => h('option', { value: t.id }, `${t.name} (${t.members.length})`))))))))) : null,
       h('section', { class: 'card' }, h('h2', null, 'Exports'), h('div', { class: 'row' },
         [['results', 'Results'], ['scores', 'All scorecards'], ['teams', 'Rosters'], ['users', 'Users'], ['mentor-log', 'Mentor log'], ['submission-log', 'Submission timestamps']]
-          .map(([k, label]) => h('a', { class: 'btn secondary sm', href: `/api/admin/export/${k}.csv` }, `⬇ ${label}`)))));
+          .map(([k, label]) => h('a', { class: 'btn secondary sm', href: `/api/admin/export/${k}.csv` }, `⬇ ${label}`)))),
+      offlineCard());
   };
+  // Offline judging package: if the network dies, judges still get every submission from a USB stick.
+  let offlineInfo = null;
+  const offlineOut = h('div', { class: 'faint', style: { marginTop: '8px' }, 'aria-live': 'polite' });
+  const showOffline = () => {
+    if (!offlineInfo || !offlineInfo.built_at) return clear(offlineOut, 'Not built yet.');
+    clear(offlineOut, `Built ${fmtTime(offlineInfo.built_at)}`, offlineInfo.teams != null ? ` · ${offlineInfo.teams} teams · ${(offlineInfo.bytes / 1048576).toFixed(1)} MB of files` : '', '. Folder on this computer: ',
+      h('code', null, offlineInfo.path), ' — copy it to a USB stick; judges open index.html in any browser. ',
+      h('a', { href: '/api/admin/offline/index.html', target: '_blank', rel: 'noopener' }, 'Preview'));
+  };
+  api.get('/api/admin/offline-package').then((r) => { offlineInfo = r; showOffline(); }).catch(() => {});
+  function offlineCard() {
+    const btn = h('button', { class: 'btn secondary sm', onclick: async () => {
+      busy(btn, true, 'Building…');
+      try { offlineInfo = await api.post('/api/admin/offline-package'); showOffline(); toast('Offline package built.', 'ok'); } catch (e) { toast(e.message, 'bad'); }
+      busy(btn, false);
+    } }, 'Build offline package');
+    return h('section', { class: 'card' }, h('h2', null, 'Offline judging package'),
+      h('p', { class: 'faint' }, 'Backup for a network outage: every team’s code, video, brief, disclosures and checkpoints as plain pages, plus printable scoresheets. Build it right after the freeze snapshots finish (about 4:35), and again if anything changes.'),
+      btn, offlineOut);
+  }
   await draw();
   on('staff:update', draw); on('teams:update', draw); on('help:update', draw);
   return root;
@@ -99,11 +120,11 @@ async function eventTab() {
   const schedBox = h('div');
   const drawSched = () => clear(schedBox, h('table', { class: 'tbl' }, h('thead', null, h('tr', null, ['Start', 'End', 'Title', 'Detail', ''].map((x) => h('th', null, x)))),
     h('tbody', null, sched.map((x, i) => h('tr', null,
-      h('td', null, h('input', { type: 'datetime-local', value: toLocal(x.start), onchange: (e) => { x.start = fromLocal(e.target.value); } })),
-      h('td', null, h('input', { type: 'datetime-local', value: toLocal(x.end), onchange: (e) => { x.end = fromLocal(e.target.value); } })),
-      h('td', null, h('input', { type: 'text', value: x.title, oninput: (e) => { x.title = e.target.value; } })),
-      h('td', null, h('input', { type: 'text', value: x.detail, oninput: (e) => { x.detail = e.target.value; } })),
-      h('td', null, h('button', { class: 'btn ghost sm', 'aria-label': 'Remove row', onclick: () => { sched.splice(i, 1); drawSched(); } }, '✕')))))),
+      h('td', null, h('input', { type: 'datetime-local', 'aria-label': `Row ${i + 1} start`, value: toLocal(x.start), onchange: (e) => { x.start = fromLocal(e.target.value); } })),
+      h('td', null, h('input', { type: 'datetime-local', 'aria-label': `Row ${i + 1} end`, value: toLocal(x.end), onchange: (e) => { x.end = fromLocal(e.target.value); } })),
+      h('td', null, h('input', { type: 'text', 'aria-label': `Row ${i + 1} title`, value: x.title, oninput: (e) => { x.title = e.target.value; } })),
+      h('td', null, h('input', { type: 'text', 'aria-label': `Row ${i + 1} detail`, value: x.detail, oninput: (e) => { x.detail = e.target.value; } })),
+      h('td', null, h('button', { class: 'btn ghost sm', 'aria-label': `Remove row ${i + 1}`, onclick: () => { sched.splice(i, 1); drawSched(); } }, '✕')))))),
   h('button', { class: 'btn secondary sm', style: { marginTop: '8px' }, onclick: () => { const last = sched[sched.length - 1]; sched.push({ start: last ? last.end : new Date().toISOString(), end: last ? last.end : new Date().toISOString(), title: 'New item', detail: '' }); drawSched(); } }, '+ Row'));
   drawSched();
 
@@ -240,9 +261,9 @@ async function scoring() {
     const C = s.criteria;
 
     const table = h('table', { class: 'tbl' },
-      h('thead', null, h('tr', null, ['#', 'Team', 'Score', ...C.map((c) => c.name.split(' ')[0]), 'Judges', 'Flags', 'Finalist', ''].map((x) => h('th', null, x)))),
+      h('thead', null, h('tr', null, ['#', 'Team', 'Score', ...C.map((c) => ({ innovation: 'Innov.', impact: 'Impact', technical: 'Tech.', usability: 'Usab.', presentation: 'Pres.' }[c.id] || c.name.split(' ')[0])), 'Judges', 'Flags', 'Finalist', ''].map((x, i) => h('th', { title: i >= 3 && i < 3 + C.length ? C[i - 3].name : null }, x)))),
       h('tbody', null, d.rows.map((r) => {
-        const detail = h('tr', { hidden: true }, h('td', { colspan: 8 + C.length }));
+        const detail = h('tr', { hidden: true }, h('td', { colspan: 7 + C.length }));
         return [h('tr', null,
           h('td', null, r.rank || '—'),
           h('td', null, h('b', null, r.team), h('div', { class: 'faint' }, r.project_title || '')),
@@ -270,8 +291,8 @@ async function scoring() {
     const awards = h('div', { class: 'grid two' }, s.awards.map((a) => {
       const cur = d.awards[a.id] || {};
       const sug = d.suggestions[a.id];
-      const sel = h('select', null, h('option', { value: '' }, '— not assigned —'), d.rows.map((r) => h('option', { value: r.team_id, selected: r.team_id === cur.team_id }, `${r.team}${r.average != null ? ` (${r.average})` : ''}`)));
-      const why = h('textarea', { maxlength: 400, placeholder: 'One-sentence judge rationale (read at the ceremony)', style: { minHeight: '60px' } }, cur.rationale || '');
+      const sel = h('select', { 'aria-label': `${a.name}: team` }, h('option', { value: '' }, '— not assigned —'), d.rows.map((r) => h('option', { value: r.team_id, selected: r.team_id === cur.team_id }, `${r.team}${r.average != null ? ` (${r.average})` : ''}`)));
+      const why = h('textarea', { maxlength: 400, 'aria-label': `${a.name}: rationale`, placeholder: 'One-sentence judge rationale (read at the ceremony)', style: { minHeight: '60px' } }, cur.rationale || '');
       return h('div', { class: 'card flat' }, h('b', null, a.name), h('div', { class: 'faint', style: { marginBottom: '8px' } }, a.hint),
         sug ? h('div', { class: 'faint', style: { marginBottom: '6px' } }, 'Suggested: ', h('a', { href: '#', onclick: (e) => { e.preventDefault(); sel.value = sug; } }, teamName(sug))) : a.id === 'ai' ? h('div', { class: 'faint', style: { marginBottom: '6px' } }, 'Judge vote — no automatic suggestion.') : null,
         sel, h('div', { style: { marginTop: '8px' } }, why),

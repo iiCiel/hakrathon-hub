@@ -25,7 +25,7 @@ export async function render() {
     clear(clockCells,
       h('div', { class: 'cell' }, h('div', { class: 'label' }, 'Now'), h('div', { class: 'value', style: { fontSize: '1.25rem', fontFamily: 'var(--sans)' } }, cur ? cur.title : (list.length && t < list[0].s ? 'Event not started' : 'Event complete')),
         h('div', { class: 'sub' }, cur && cur.e > cur.s ? `until ${fmtTime(cur.end)}` : fmtTime(new Date(t).toISOString()))),
-      next ? h('div', { class: 'cell' }, h('div', { class: 'label' }, `Next: ${next.title}`), h('div', { class: 'value' }, fmtCountdown(next.s - t)), h('div', { class: 'sub' }, `at ${fmtTime(next.start)}`)) : null,
+      next ? h('div', { class: 'cell' }, h('div', { class: 'label' }, `${next.title} starts in`), h('div', { class: 'value' }, fmtCountdown(next.s - t)), h('div', { class: 'sub' }, `at ${fmtTime(next.start)}`)) : null,
       h('div', { class: 'cell' }, h('div', { class: 'label' }, 'Build freeze'), h('div', { class: 'value gold' }, t < fz ? fmtCountdown(fz - t) : 'Frozen'),
         h('div', { class: 'sub' }, `${fmtTime(new Date(fz).toISOString())}${ev.global_extension_minutes ? ` (extended ${ev.global_extension_minutes} min)` : ''}`)));
     clear(timeline, list.map((x) => {
@@ -48,7 +48,12 @@ export async function render() {
   on('chat:message', (m) => { if (m.channel === 'announcements') { annMsgs.push(m); drawAnn(annMsgs); } });
 
   const hero = h('section', { class: 'hero' },
-    h('div', { class: 'kicker' }, 'Friday, November 6 · College of Business · 7:30 a.m.–7:30 p.m.'),
+    h('div', { class: 'kicker' }, (() => {
+      const sc = (ev.schedule || []).slice().sort((a, b) => new Date(a.start) - new Date(b.start));
+      if (!sc.length) return 'College of Business';
+      const first = new Date(sc[0].start), last = new Date(Math.max(...sc.map((x) => new Date(x.end || x.start).getTime())));
+      return `${first.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' })} · College of Business · ${fmtTime(first.toISOString())}–${fmtTime(last.toISOString())}`;
+    })()),
     h('h1', null, ev.event_name),
     ev.challenge_released
       ? h('div', null, h('div', { class: 'kicker', style: { marginTop: '6px' } }, 'The challenge'), h('p', { class: 'challenge' }, ev.challenge))

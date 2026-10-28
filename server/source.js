@@ -67,8 +67,10 @@ async function replaceDir(finalDir, tmpDir) {
   fsp.rm(old, { recursive: true, force: true }).catch(() => {});
 }
 
-// Clone a public (or token-accessible) GitHub repo at its default branch head.
-async function snapshotRepo(teamId, url, { useToken = false } = {}) {
+// Clone a public (or token-accessible) GitHub repo at its default branch head. With `before`
+// (the team's freeze time, ms) it takes the last commit made before then instead, so pushes that
+// land while the freeze sweep is still cloning don't become the official snapshot.
+async function snapshotRepo(teamId, url, { useToken = false, before = 0 } = {}) {
   const gh = parseGithubUrl(url);
   if (!gh) throw Object.assign(new Error('Use a GitHub repository URL like https://github.com/owner/repo'), { status: 400 });
   const root = path.join(SRC_DIR, `team-${Number(teamId)}`);
@@ -81,9 +83,11 @@ async function snapshotRepo(teamId, url, { useToken = false } = {}) {
   // Token goes in through GIT_CONFIG_* env vars: never in argv, the URL, or .git/config.
   const authEnv = token ? { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'http.https://github.com/.extraheader',
     GIT_CONFIG_VALUE_0: `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${token}`).toString('base64')}` } : {};
-  const r = await git(['-c', 'core.symlinks=false', '-c', 'core.hooksPath=/dev/null', '-c', 'credential.helper=',
-    '-c', 'protocol.file.allow=never', '-c', 'protocol.ext.allow=never',
-    'clone', '--depth', '1', '--single-branch', '--no-tags', '--', cloneUrl, tmp], { env: authEnv });
+  const safe = ['-c', 'core.symlinks=false', '-c', 'core.hooksPath=/dev/null', '-c', 'credential.helper=',
+    '-c', 'protocol.file.allow=never', '-c', 'protocol.ext.allow=never'];
+  // A freeze snapshot needs history to find the pre-freeze commit: blobless clone, checkout after.
+  const how = before ? ['--filter=blob:none', '--no-checkout'] : ['--depth', '1'];
+  const r = await git([...safe, 'clone', ...how, '--single-branch', '--no-tags', '--', cloneUrl, tmp], { env: authEnv, timeout: before ? 150000 : 90000 });
   const scrub = (s) => (token ? s.split(token).join('***') : s);
   if (!r.ok) {
     fsp.rm(tmp, { recursive: true, force: true }).catch(() => {});
@@ -93,16 +97,29 @@ async function snapshotRepo(teamId, url, { useToken = false } = {}) {
     if (!/not found|terminal prompts disabled/i.test(r.stderr)) console.error(`[git] team ${teamId} clone failed: ${scrub(r.stderr).slice(-500)}`);
     throw Object.assign(new Error(msg), { status: 400 });
   }
+  let afterFreeze = false;
+  if (before) {
+    let pick = (await git(['rev-list', '-1', `--before=${Math.floor(before / 1000)}`, 'HEAD'], { cwd: tmp })).stdout;
+    if (!pick) { pick = 'HEAD'; afterFreeze = true; } // every commit is dated after the freeze
+    const co = await git([...safe, 'checkout', '--detach', '-q', pick], { cwd: tmp, env: authEnv, timeout: 150000 });
+    if (!co.ok) {
+      fsp.rm(tmp, { recursive: true, force: true }).catch(() => {});
+      console.error(`[git] team ${teamId} checkout failed: ${scrub(co.stderr).slice(-500)}`);
+      throw Object.assign(new Error('Snapshot failed while checking out the pre-freeze commit. Try again or ask staff.'), { status: 400 });
+    }
+  }
   const sha = (await git(['rev-parse', 'HEAD'], { cwd: tmp })).stdout;
   const date = (await git(['log', '-1', '--format=%cI'], { cwd: tmp })).stdout;
-  const branch = (await git(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: tmp })).stdout;
+  const branch = before ? (await git(['symbolic-ref', '--short', '-q', 'refs/remotes/origin/HEAD'], { cwd: tmp })).stdout.replace(/^origin\//, '')
+    || (await git(['branch', '--show-current'], { cwd: tmp })).stdout || 'HEAD'
+    : (await git(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: tmp })).stdout;
   await fsp.rm(path.join(tmp, '.git'), { recursive: true, force: true });
   if ((await dirSize(tmp)) > MAX_BYTES) {
     fsp.rm(tmp, { recursive: true, force: true }).catch(() => {});
     throw Object.assign(new Error('Repository is larger than 300 MB. Remove large files and try again.'), { status: 400 });
   }
   await replaceDir(teamDir(teamId, 'repo'), tmp);
-  return { sha, commitDate: date, branch, url: gh.url };
+  return { sha, commitDate: date, branch, url: gh.url, afterFreeze };
 }
 
 // Extract an uploaded zip safely: no path traversal, no symlinks, size/entry caps.

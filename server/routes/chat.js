@@ -80,7 +80,9 @@ r.delete('/chat/messages/:id', wrap((req) => {
   if (m.user_id !== u.id && u.role !== 'admin') throw new HttpError(403, 'You can only delete your own messages.');
   run('UPDATE messages SET deleted = 1, pinned = 0 WHERE id = ?', m.id);
   if (m.user_id !== u.id) audit(u.id, 'chat.delete', { id: m.id, channel: m.channel });
-  bus.emit(roomFor(m.channel), 'chat:update', shape(get(`${MSG_SQL} WHERE m.id = ?`, m.id)));
+  const upd = shape(get(`${MSG_SQL} WHERE m.id = ?`, m.id));
+  bus.emit(roomFor(m.channel), 'chat:update', upd);
+  if (m.channel.startsWith('team:')) bus.emit('admins', 'chat:update', upd); // moderators see it too
   return { ok: true };
 }));
 
@@ -90,7 +92,9 @@ r.post('/chat/messages/:id/pin', wrap((req) => {
   if (!m) throw new HttpError(404, 'Message not found.');
   run('UPDATE messages SET pinned = ? WHERE id = ?', (req.body || {}).pinned ? 1 : 0, m.id);
   audit(u.id, 'chat.pin', { id: m.id });
-  bus.emit(roomFor(m.channel), 'chat:update', shape(get(`${MSG_SQL} WHERE m.id = ?`, m.id)));
+  const upd = shape(get(`${MSG_SQL} WHERE m.id = ?`, m.id));
+  bus.emit(roomFor(m.channel), 'chat:update', upd);
+  if (m.channel.startsWith('team:')) bus.emit('admins', 'chat:update', upd);
   return { ok: true };
 }));
 

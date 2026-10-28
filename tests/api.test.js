@@ -141,6 +141,14 @@ test('checkpoints', async () => {
   ok(await p[1].put('/api/teams/mine/checkpoints/cp2', { demo1: 'Problem', demo2: 'Queue demo', demo3: 'Impact' }));
   const cps = ok(await p[2].get('/api/teams/mine/checkpoints')).checkpoints;
   assert.ok(cps.cp1 && cps.cp2);
+  // an on-time checkpoint edited after its deadline keeps its time and stays on time
+  const cp1At = ok(await admin.get('/api/admin/settings')).settings.cp1_at;
+  ok(await admin.put('/api/admin/settings', { cp1_at: new Date(Date.now() - 3600000).toISOString() }));
+  ok(await p[0].put('/api/teams/mine/checkpoints/cp1', { user: 'Advising office', problem: 'Walk-in lines are long (typo fixed)', outcome: 'Shorter waits', evidence: 'Observed 40 min waits', success: 'Median wait < 10 min', tech: 'Flask + SQLite' }));
+  const after = ok(await p[2].get('/api/teams/mine/checkpoints')).checkpoints.cp1;
+  assert.equal(after.late, false); assert.equal(after.submitted_at, cps.cp1.submitted_at); assert.ok(after.updated_at);
+  assert.match(after.data.problem, /typo fixed/);
+  ok(await admin.put('/api/admin/settings', { cp1_at: cp1At }));
 });
 
 test('chat channels and isolation', async () => {
@@ -241,6 +249,15 @@ test('GitHub repo snapshot', { skip: process.env.SKIP_NET && 'no network' }, asy
   assert.match(r.data.submission.repo_sha, /^[0-9a-f]{40}$/);
   const tree = ok(await p[3].get(`/api/source/${teamB.id}/repo/tree`));
   assert.ok(tree.tree.some((x) => x.path === 'README'));
+  // freeze snapshots take the last commit made before the freeze, not whatever HEAD is by then
+  const source = require('../server/source');
+  const head = r.data.submission.repo_sha;
+  const old = await source.snapshotRepo(teamB.id, 'https://github.com/octocat/Hello-World', { before: Date.parse('2011-06-01T00:00:00Z') });
+  assert.notEqual(old.sha, head); assert.ok(Date.parse(old.commitDate) < Date.parse('2011-06-01T00:00:00Z')); assert.equal(old.afterFreeze, false);
+  const now = await source.snapshotRepo(teamB.id, 'https://github.com/octocat/Hello-World', { before: Date.now() });
+  assert.equal(now.sha, head);
+  const none = await source.snapshotRepo(teamB.id, 'https://github.com/octocat/Hello-World', { before: Date.parse('2000-01-01T00:00:00Z') });
+  assert.equal(none.afterFreeze, true);
 });
 
 test('build freeze locks edits; judges get access', async () => {
@@ -309,6 +326,15 @@ test('admin tools: exports, reset password, disable', async () => {
   ok(await p[0].post('/api/chat/general', { body: '=HYPERLINK("http://evil")' }));
   const csv = await admin.req('GET', '/api/admin/export/scores.csv', undefined, { raw: true });
   assert.equal(csv.status, 200);
+  // offline judging package: static pages, admin only, team files served as text
+  status(await p[0].post('/api/admin/offline-package'), 403);
+  const pkg = ok(await admin.post('/api/admin/offline-package'));
+  assert.ok(pkg.teams >= 2 && pkg.built_at);
+  const idx = await admin.req('GET', '/api/admin/offline/index.html', undefined, { raw: true });
+  assert.equal(idx.status, 200); const html = await idx.text();
+  assert.ok(html.includes(teamA.name) && html.includes('scoresheets.html'));
+  status(await admin.get('/api/admin/offline/..%2F..%2Fhakrathon.db'), 404);
+  status(await p[0].get('/api/admin/offline/index.html'), 403);
   const users = ok(await admin.get('/api/admin/users')).users;
   const u = users.find((x) => x.email === 'p4@zips.uakron.edu');
   const reset = ok(await admin.post(`/api/admin/users/${u.id}/reset-password`));
@@ -320,4 +346,20 @@ test('admin tools: exports, reset password, disable', async () => {
   status(await admin.patch(`/api/admin/users/${me.id}`, { role: 'judge' }), 400, 'cannot demote self');
   const t = await admin.req('GET', '/api/admin/export/teams.csv', undefined, { raw: true });
   assert.match(await t.text(), /Zip Coders/);
+});
+
+test('tie-break ranking is a strict order (same result for any input order)', () => {
+  const { rankScored } = require('../server/routes/judge');
+  const mk = (id, avg, impact) => ({ team_id: id, team: `T${id}`, average: avg, criteria: { impact, technical: 5, innovation: 5 }, flags: [] });
+  const perms = [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]];
+  const seen = new Set();
+  for (const p of perms) {
+    const base = [mk(1, 80.0, 6), mk(2, 79.8, 7), mk(3, 79.6, 8)];
+    seen.add(rankScored(p.map((i) => base[i])).map((x) => x.team).join('>'));
+  }
+  assert.equal(seen.size, 1, `orders differ: ${[...seen].join(' | ')}`);
+  // T1 (80.0) groups with T2 (79.8, within 0.25), Impact puts T2 first; T3 (79.6) is 0.4 below T1.
+  assert.equal([...seen][0], 'T2>T1>T3');
+  const r = rankScored([mk(1, 70, 5), mk(2, 70, 5)]);
+  assert.ok(r[0].flags.some((f) => f.includes('judge vote needed')));
 });

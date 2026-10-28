@@ -11,14 +11,19 @@ export async function render() {
 
   const load = async () => { data = await api.get('/api/submission'); draw(); };
   const draw = () => clear(root, view());
-  on('submission:update', () => { if (!dirtyForm) load(); else toast('A teammate updated the submission. Save your changes, then refresh to see theirs.', '', 7000); });
+  on('submission:update', () => { if (!dirtyForm) load(); else toast('A teammate saved part of the package. When you save, only the fields you changed are sent, so their work is kept.', '', 8000); });
+  // Registered once (view() runs on every redraw). An extension or freeze changes what can be edited.
+  let tickFn = null;
+  on('tick', (t) => tickFn && tickFn(t));
+  const refresh = () => { if (!dirtyForm) load(); };
+  on('team:update', refresh); on('event:update', refresh);
   const guard = (e) => { if (dirtyForm) { e.preventDefault(); e.returnValue = ''; } };
   window.addEventListener('beforeunload', guard);
   onLeave(() => window.removeEventListener('beforeunload', guard));
 
   function view() {
     const s = data.submission;
-    const locked = !s.canEdit;
+    let locked = !s.canEdit;
     const markDirty = () => { dirtyForm = true; saveBar.hidden = false; };
 
     // ---------- text fields ----------
@@ -39,9 +44,16 @@ export async function render() {
     const saveBtn = h('button', { class: 'btn', onclick: async () => {
       busy(saveBtn, true, 'Saving…');
       try {
-        const body = { project_title: title.value, prototype_url: protoUrl.value, video_url: videoUrl.value, run_command: runCmd.value,
-          brief: Object.fromEntries(Object.entries(brief).map(([k, el]) => [k, el.value])), disclosure: Object.fromEntries(Object.entries(disc).map(([k, el]) => [k, el.value])) };
-        if (!s.video_file) body.video_seconds = parseDur(videoSecs.value);
+        // Send only what this person changed, so teammates editing other fields at the same time don't
+        // get their work overwritten with this page's older copy (the server merges partial saves).
+        const body = {};
+        for (const [k, el] of [['project_title', title], ['prototype_url', protoUrl], ['video_url', videoUrl], ['run_command', runCmd]]) if (el.value !== (s[k] || '')) body[k] = el.value;
+        const changedOf = (els, old) => Object.fromEntries(Object.entries(els).filter(([k, el]) => el.value !== (old[k] || '')).map(([k, el]) => [k, el.value]));
+        const bc = changedOf(brief, s.brief), dc = changedOf(disc, s.disclosure);
+        if (Object.keys(bc).length) body.brief = bc;
+        if (Object.keys(dc).length) body.disclosure = dc;
+        const oldSecs = s.video_seconds && !s.video_file ? fmtDur(s.video_seconds) : '';
+        if (!s.video_file && videoSecs.value !== oldSecs) body.video_seconds = parseDur(videoSecs.value);
         data.submission = (await api.put('/api/submission', body)).submission;
         dirtyForm = false;
         toast('Submission saved.', 'ok');
@@ -52,7 +64,7 @@ export async function render() {
       h('b', null, 'Unsaved changes'), h('span', { class: 'spacer' }), saveBtn);
 
     // ---------- repo ----------
-    const repoInput = h('input', { type: 'url', value: s.repo_url, disabled: locked, placeholder: 'https://github.com/your-team/project' });
+    const repoInput = h('input', { type: 'url', 'aria-label': 'GitHub repository URL', value: s.repo_url, disabled: locked, placeholder: 'https://github.com/your-team/project' });
     const snapBtn = h('button', { class: 'btn', disabled: locked, onclick: async () => {
       busy(snapBtn, true, 'Cloning…');
       try { data.submission = (await api.post('/api/submission/repo', { repo_url: repoInput.value })).submission; toast('Snapshot saved. Judges will see this commit.', 'ok'); draw(); }
@@ -94,7 +106,7 @@ export async function render() {
       field('Project title', title),
       h('div', null, h('b', null, 'GitHub repository'), h('div', { class: 'faint', style: { margin: '2px 0 6px' } }, 'Must be public (or shared with staff). We take an official snapshot automatically at build freeze; you can snapshot any time before then to check it works.'),
         h('div', { class: 'row', style: { flexWrap: 'nowrap' } }, repoInput, snapBtn),
-        s.repo_sha ? h('div', { class: 'faint', style: { marginTop: '6px' } }, tick(true), ' Snapshot ', h('code', null, s.repo_sha.slice(0, 10)), ` · ${s.repo_branch} · captured ${fmtAgo(s.repo_snapshot_at, now())}`, ' ', s.repo_final ? badge('Official freeze snapshot', 'ok') : null, ' ', remover('repo', 'repository')) : null,
+        s.repo_sha ? h('div', { class: 'faint', style: { marginTop: '6px' } }, tick(true), ' Snapshot ', h('code', null, s.repo_sha.slice(0, 10)), ` · ${s.repo_branch} · captured ${fmtAgo(s.repo_snapshot_at, now())}`, ' ', s.repo_official ? badge('Official freeze snapshot', 'ok') : null, ' ', remover('repo', 'repository')) : null,
         s.repo_error ? h('div', { class: 'badge bad', style: { whiteSpace: 'normal', marginTop: '6px', display: 'block', padding: '6px 10px' } }, s.repo_error) : null),
       h('div', null, h('b', null, 'Or upload a zip'), h('div', { class: 'faint', style: { margin: '2px 0 6px' } }, 'Up to 100 MB. Leave out node_modules, venv and build folders.'),
         s.zip_name ? h('div', { class: 'faint', style: { marginBottom: '6px' } }, tick(true), ` ${s.zip_name} · ${fmtDateTime(s.zip_at)} `, remover('zip', 'zip')) : null,
@@ -132,10 +144,10 @@ export async function render() {
 
     // ---------- side ----------
     const fz = freezeAt();
-    const countdown = h('b', { style: { fontFamily: 'var(--mono)', fontSize: '1.4rem', color: 'var(--gold)' } });
+    const countdown = h('b', { style: { fontFamily: 'var(--mono)', fontSize: '1.4rem', color: 'var(--gold-ink)' } });
     const tickDown = (t) => { countdown.textContent = t >= fz ? 'Locked' : fmtCountdownSafe(fz - t); };
     tickDown(now());
-    on('tick', tickDown);
+    tickFn = (t) => { tickDown(t); if (t >= fz && s.canEdit && !locked) { locked = true; if (!dirtyForm) load(); } };
     const logBox = h('div', { class: 'faint', style: { fontSize: '.82rem', maxHeight: '220px', overflowY: 'auto' } });
     api.get(`/api/submissions/${state.team.id}/log`).then((d) => clear(logBox, d.log.slice(0, 40).map((l) => h('div', { style: { padding: '3px 0', borderBottom: '1px dashed var(--line)' } }, `${fmtTime(l.created_at)} · ${l.name || 'system'} · ${l.action}${l.detail ? ` · ${l.detail}` : ''}`)))).catch(() => {});
 

@@ -10,7 +10,8 @@ export async function render() {
       h('div', { class: 'card-head' }, h('h3', null, t.name), t.table_no ? badge(`Table ${t.table_no}`, 'blue') : null),
       h('div', { class: 'faint' }, laneName(t.lane) || 'No lane yet'),
       h('ul', { style: { paddingLeft: '18px', margin: '10px 0' } }, t.members.map((m) => h('li', null, m.name, m.preferred_role ? h('span', { class: 'faint' }, ` · ${m.preferred_role}`) : null))),
-      ['admin', 'mentor', 'judge'].includes(role()) ? h('div', { class: 'row' },
+      role() === 'judge' && !t.frozen ? h('p', { class: 'faint' }, 'Code and submission open to judges at build freeze.')
+      : ['admin', 'mentor', 'judge'].includes(role()) ? h('div', { class: 'row' },
         h('a', { class: 'btn secondary sm', href: `#/workspace/${t.id}` }, 'Code'),
         h('a', { class: 'btn secondary sm', href: `#/review/${t.id}` }, 'Submission'),
         role() === 'judge' ? h('a', { class: 'btn sm', href: `#/judge/${t.id}` }, 'Score') : null) : null))

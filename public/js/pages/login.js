@@ -20,9 +20,9 @@ export function render(route) {
   const draw = () => clear(box, mode === 'login' ? loginForm() : registerForm());
 
   function tabs() {
-    return h('div', { class: 'seg', role: 'tablist', style: { marginBottom: '16px', width: '100%' } },
-      h('button', { class: mode === 'login' ? 'on' : '', role: 'tab', 'aria-selected': String(mode === 'login'), style: { flex: 1 }, onclick: () => { mode = 'login'; draw(); } }, 'Sign in'),
-      h('button', { class: mode === 'register' ? 'on' : '', role: 'tab', 'aria-selected': String(mode === 'register'), style: { flex: 1 }, onclick: () => { mode = 'register'; draw(); } }, 'Create account'));
+    return h('div', { class: 'seg', role: 'group', 'aria-label': 'Sign in or create an account', style: { marginBottom: '16px', width: '100%' } },
+      h('button', { type: 'button', class: mode === 'login' ? 'on' : '', 'aria-pressed': String(mode === 'login'), style: { flex: 1 }, onclick: () => { mode = 'login'; draw(); } }, 'Sign in'),
+      h('button', { type: 'button', class: mode === 'register' ? 'on' : '', 'aria-pressed': String(mode === 'register'), style: { flex: 1 }, onclick: () => { mode = 'register'; draw(); } }, 'Create account'));
   }
 
   function loginForm() {

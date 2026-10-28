@@ -41,8 +41,8 @@ export function sourceBrowser(teamId, kind) {
 
 // Run a team's snapshot in the sandbox with its declared (or a custom) run command.
 export function sourceRunner(teamId, kind, command, { allowEdit = true } = {}) {
-  const cmd = h('input', { type: 'text', value: command || '', placeholder: 'e.g. python3 app.py', style: { fontFamily: 'var(--mono)' }, readonly: !allowEdit });
-  const stdin = h('textarea', { placeholder: 'stdin (optional)', style: { minHeight: '50px', fontFamily: 'var(--mono)', fontSize: '.85rem' } });
+  const cmd = h('input', { type: 'text', 'aria-label': 'Run command', value: command || '', placeholder: 'e.g. python3 app.py', style: { fontFamily: 'var(--mono)' }, readonly: !allowEdit });
+  const stdin = h('textarea', { 'aria-label': 'Program input (stdin)', placeholder: 'stdin (optional)', style: { minHeight: '50px', fontFamily: 'var(--mono)', fontSize: '.85rem' } });
   const out = h('pre', { class: 'output', style: { minHeight: '120px', maxHeight: '360px', borderRadius: '8px' } }, h('span', { class: 'sys' }, 'Runs offline in the sandbox (no internet, 30 s). Projects that need packages installed or a web server should be judged from the live link or demo video.'));
   const btn = h('button', { class: 'btn', onclick: async () => {
     if (!cmd.value.trim()) return toast('Enter a run command.', 'bad');
@@ -75,7 +75,7 @@ export function submissionView(team, sub, { briefFields, disclosureFields }) {
   const proto = h('section', { class: 'card stack' }, h('h2', null, '1 · Working prototype'), linkRow('Live link:', s.prototype_url));
   if (s.repo_url) {
     proto.append(h('div', null, linkRow('Repository:', s.repo_url),
-      s.repo_sha ? h('div', { class: 'faint', style: { marginTop: '4px' } }, `Snapshot ${s.repo_final ? '(official, taken at build freeze)' : ''}: `, h('code', null, s.repo_sha.slice(0, 10)), ` on ${s.repo_branch || 'default branch'} · last commit ${fmtDateTime(s.repo_commit_date)} · captured ${fmtDateTime(s.repo_snapshot_at)}`,
+      s.repo_sha ? h('div', { class: 'faint', style: { marginTop: '4px' } }, `Snapshot ${s.repo_official ? '(official, last commit before build freeze)' : s.frozen ? '(not the official freeze snapshot)' : ''}: `, h('code', null, s.repo_sha.slice(0, 10)), ` on ${s.repo_branch || 'default branch'} · last commit ${fmtDateTime(s.repo_commit_date)} · captured ${fmtDateTime(s.repo_snapshot_at)}`,
         s.repo_commit_date && new Date(s.repo_commit_date) > new Date(s.freeze_at) ? h('span', { class: 'badge bad', style: { marginLeft: '6px' } }, 'Commit after freeze') : null) : null,
       s.repo_error ? h('div', { class: 'badge bad', style: { whiteSpace: 'normal', marginTop: '6px' } }, s.repo_error) : null));
   }
@@ -85,7 +85,7 @@ export function submissionView(team, sub, { briefFields, disclosureFields }) {
     const holder = h('div');
     const runHolder = h('div');
     const drawSrc = () => { clear(holder, sourceBrowser(team.id, kind)); clear(runHolder, sourceRunner(team.id, kind, s.run_command)); };
-    proto.append(...[kinds.length > 1 ? h('div', { class: 'seg' }, kinds.map((k) => h('button', { class: k === kind ? 'on' : '', onclick: (e) => { kind = k; for (const b of e.target.parentNode.children) b.classList.toggle('on', b === e.target); drawSrc(); } }, k === 'repo' ? 'GitHub snapshot' : `Zip: ${s.zip_name}`))) : null,
+    proto.append(...[kinds.length > 1 ? h('div', { class: 'seg' }, kinds.map((k) => h('button', { class: k === kind ? 'on' : '', 'aria-pressed': String(k === kind), onclick: (e) => { kind = k; for (const b of e.currentTarget.parentNode.children) { b.classList.toggle('on', b === e.currentTarget); b.setAttribute('aria-pressed', String(b === e.currentTarget)); } drawSrc(); } }, k === 'repo' ? 'GitHub snapshot' : `Zip: ${s.zip_name}`))) : null,
       holder,
       h('details', null, h('summary', { style: { cursor: 'pointer', fontWeight: 600 } }, 'Run it in the sandbox', s.run_command ? h('span', { class: 'faint' }, ` · team says: ${s.run_command}`) : null), h('div', { style: { marginTop: '10px' } }, runHolder))].filter(Boolean));
     drawSrc();
@@ -105,7 +105,8 @@ export function submissionView(team, sub, { briefFields, disclosureFields }) {
     });
     vid.append(v, warn);
   }
-  if (s.video_url) vid.append(linkRow(isVideoHost(s.video_url) ? 'Video link:' : 'Link:', s.video_url));
+  if (s.video_url) vid.append(linkRow(isVideoHost(s.video_url) ? 'Video link:' : 'Link:', s.video_url),
+    h('p', { class: 'faint' }, 'Linked videos can’t be stopped automatically: judge only the first 5:00.', s.video_seconds && !s.video_file ? ` The team says it runs ${Math.floor(s.video_seconds / 60)}:${String(Math.round(s.video_seconds % 60)).padStart(2, '0')} (not checked).` : ''));
   if (!s.video_file && !s.video_url) vid.append(h('p', { class: 'faint' }, 'No demo submitted.'));
   sections.push(vid);
 
