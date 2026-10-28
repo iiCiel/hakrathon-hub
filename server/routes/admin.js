@@ -1,0 +1,292 @@
+'use strict';
+const express = require('express');
+const { get, all, run, tx, audit } = require('../db');
+const A = require('../auth');
+const S = require('../settings');
+const runner = require('../runner');
+const source = require('../source');
+const { teamPublic, getCheckpoints } = require('./core');
+const { postMessage } = require('./chat');
+const { completeness, subRow, adminSnapshot } = require('./submit');
+const { tabulate } = require('./judge');
+const { wrap, str, int, now, code, bus, HttpError } = require('../util');
+
+const r = express.Router();
+r.use((req, _res, next) => { try { A.requireRole(req, 'admin'); next(); } catch (e) { next(e); } });
+
+const ROLES = ['admin', 'judge', 'mentor', 'participant'];
+
+r.get('/admin/overview', wrap(() => {
+  const teams = all('SELECT * FROM teams ORDER BY CAST(table_no AS INTEGER), name').map((t) => {
+    const s = subRow(t.id);
+    const cps = getCheckpoints(t.id);
+    const comp = completeness(t, s, cps);
+    const val = get('SELECT * FROM validations WHERE team_id = ?', t.id) || {};
+    return { ...teamPublic(t, { withCode: true }), project_title: s.project_title, completeness: comp,
+      checkpoints: { cp1: cps.cp1 ? { at: cps.cp1.submitted_at, late: cps.cp1.late } : null, cp2: cps.cp2 ? { at: cps.cp2.submitted_at, late: cps.cp2.late } : null },
+      repo: { url: s.repo_url, sha: s.repo_sha, at: s.repo_snapshot_at, final: !!s.repo_final, error: s.repo_error },
+      video_seconds: s.video_seconds, validation: val, open_help: get("SELECT COUNT(*) AS c FROM help_requests WHERE team_id = ? AND status IN ('open','claimed')", t.id).c };
+  });
+  const counts = Object.fromEntries(ROLES.map((r2) => [r2, get('SELECT COUNT(*) AS c FROM users WHERE role = ? AND disabled = 0', r2).c]));
+  const unassigned = all("SELECT id, name, email, preferred_role, skills, major FROM users WHERE role = 'participant' AND team_id IS NULL AND disabled = 0 ORDER BY name");
+  return {
+    teams, counts, unassigned, checkedIn: get("SELECT COUNT(*) AS c FROM users WHERE role='participant' AND checked_in = 1").c,
+    help: { open: get("SELECT COUNT(*) AS c FROM help_requests WHERE status = 'open'").c, claimed: get("SELECT COUNT(*) AS c FROM help_requests WHERE status = 'claimed'").c },
+    runner: { ...runner.runnerStatus(), queue: runner.queueDepth(), runsLastHour: get("SELECT COUNT(*) AS c FROM runs WHERE created_at > ?", new Date(Date.now() - 3600000).toISOString()).c },
+    settings: S.getSettings(), github: !!(process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET),
+  };
+}));
+
+// ---------- settings ----------
+const ISO_KEYS = ['roster_lock_at', 'cp1_at', 'cp2_at', 'upload_open_at', 'build_freeze_at', 'validation_end_at'];
+r.get('/admin/settings', wrap(() => ({ settings: S.getSettings() })));
+r.put('/admin/settings', wrap((req) => {
+  const b = req.body || {};
+  const before = S.getSettings();
+  const patch = {};
+  for (const k of ISO_KEYS) if (k in b) { if (Number.isNaN(Date.parse(b[k]))) throw new HttpError(400, `Bad date for ${k}.`); patch[k] = new Date(b[k]).toISOString(); }
+  for (const k of ['event_name', 'tagline']) if (k in b) patch[k] = str(b[k], { max: 120, required: true, name: k });
+  if ('challenge' in b) patch.challenge = str(b.challenge, { max: 4000, required: true, name: 'Challenge' });
+  if ('participant_email_domains' in b) patch.participant_email_domains = str(b.participant_email_domains, { max: 300 });
+  for (const k of ['challenge_released', 'judging_open', 'finalists_open', 'results_published', 'registration_open', 'one_prize_per_team', 'runner_enabled']) if (k in b) patch[k] = !!b[k];
+  if ('global_extension_minutes' in b) patch.global_extension_minutes = int(b.global_extension_minutes, { min: 0, max: 240, name: 'Extension minutes' });
+  if ('max_teams' in b) patch.max_teams = int(b.max_teams, { min: 1, max: 100, name: 'Max teams' });
+  if ('team_min' in b) patch.team_min = int(b.team_min, { min: 1, max: 20, name: 'Team minimum' });
+  if ('team_max' in b) patch.team_max = int(b.team_max, { min: 1, max: 20, name: 'Team maximum' });
+  if ('min_judges' in b) patch.min_judges = int(b.min_judges, { min: 1, max: 20, name: 'Minimum judges' });
+  if ('max_video_seconds' in b) patch.max_video_seconds = int(b.max_video_seconds, { min: 30, max: 3600, name: 'Max video length' });
+  if ('finalists' in b) {
+    if (!Array.isArray(b.finalists) || b.finalists.length > 10) throw new HttpError(400, 'Finalists must be a list of teams.');
+    patch.finalists = b.finalists.map((x) => teamExists(x));
+  }
+  if ('schedule' in b) {
+    if (!Array.isArray(b.schedule) || b.schedule.length > 60) throw new HttpError(400, 'Bad schedule.');
+    patch.schedule = b.schedule.map((x) => {
+      if (Number.isNaN(Date.parse(x.start)) || Number.isNaN(Date.parse(x.end || x.start))) throw new HttpError(400, 'Every schedule row needs valid times.');
+      return { start: new Date(x.start).toISOString(), end: new Date(x.end || x.start).toISOString(), title: str(x.title, { max: 80, required: true, name: 'Schedule title' }), detail: str(x.detail, { max: 400 }) };
+    }).sort((a, c) => Date.parse(a.start) - Date.parse(c.start));
+  }
+  const s = S.setSettings(patch);
+  if (s.team_min > s.team_max) { S.setSettings({ team_min: before.team_min, team_max: before.team_max }); throw new HttpError(400, 'Team minimum is larger than maximum.'); }
+  // Moving the freeze later re-opens teams; their official snapshot must be re-taken at the new freeze.
+  if ('build_freeze_at' in patch || 'global_extension_minutes' in patch) {
+    for (const t of all('SELECT * FROM teams')) if (!S.isFrozen(t)) run('UPDATE submissions SET repo_final = 0 WHERE team_id = ?', t.id);
+  }
+  audit(req.user.id, 'settings', Object.keys(patch));
+  bus.emit('all', 'event:update', {});
+  return { settings: S.getSettings() };
+}));
+function teamExists(id) { const t = get('SELECT id FROM teams WHERE id = ?', Number(id)); if (!t) throw new HttpError(400, 'Unknown team.'); return t.id; }
+
+// ---------- people ----------
+r.get('/admin/users', wrap(() => ({
+  users: all(`SELECT u.id, u.email, u.name, u.role, u.team_id, t.name AS team_name, u.major, u.class_level, u.skills, u.preferred_role,
+    u.github_login, u.disabled, u.checked_in, u.created_at FROM users u LEFT JOIN teams t ON t.id = u.team_id ORDER BY u.role, u.name`),
+})));
+
+r.patch('/admin/users/:id', wrap((req) => {
+  const u = get('SELECT * FROM users WHERE id = ?', Number(req.params.id));
+  if (!u) throw new HttpError(404, 'User not found.');
+  const b = req.body || {};
+  const role = 'role' in b ? String(b.role) : u.role;
+  if (!ROLES.includes(role)) throw new HttpError(400, 'Bad role.');
+  if (u.id === req.user.id && (role !== 'admin' || b.disabled)) throw new HttpError(400, 'You cannot demote or disable yourself.');
+  let teamId = 'team_id' in b ? (b.team_id ? teamExists(b.team_id) : null) : u.team_id;
+  if (role !== 'participant') teamId = null;
+  const oldTeam = u.team_id;
+  run('UPDATE users SET role = ?, team_id = ?, disabled = ?, checked_in = ?, name = ? WHERE id = ?', role, teamId,
+    'disabled' in b ? (b.disabled ? 1 : 0) : u.disabled, 'checked_in' in b ? (b.checked_in ? 1 : 0) : u.checked_in,
+    'name' in b ? str(b.name, { max: 80, required: true, name: 'Name' }) : u.name, u.id);
+  if (b.disabled) { A.destroyUserSessions(u.id); bus.disconnectUser(u.id); }
+  audit(req.user.id, 'user.update', { id: u.id, role, teamId, disabled: b.disabled });
+  bus.syncUser(u.id);
+  for (const t of new Set([oldTeam, teamId].filter(Boolean))) bus.emit(`team:${t}`, 'team:update', {});
+  bus.emit('all', 'teams:update', {});
+  return { ok: true };
+}));
+
+r.post('/admin/users/:id/reset-password', wrap((req) => {
+  const u = get('SELECT id, email FROM users WHERE id = ?', Number(req.params.id));
+  if (!u) throw new HttpError(404, 'User not found.');
+  const temp = `${code(4)}-${code(4)}`;
+  run('UPDATE users SET password_hash = ? WHERE id = ?', A.hashPassword(temp), u.id);
+  A.destroyUserSessions(u.id);
+  bus.disconnectUser(u.id);
+  audit(req.user.id, 'user.reset-password', { id: u.id });
+  return { email: u.email, tempPassword: temp };
+}));
+
+// ---------- invites ----------
+r.get('/admin/invites', wrap(() => ({ invites: all('SELECT * FROM invites ORDER BY created_at DESC') })));
+r.post('/admin/invites', wrap((req) => {
+  const b = req.body || {};
+  const role = String(b.role || '');
+  if (!ROLES.includes(role)) throw new HttpError(400, 'Pick a role.');
+  const maxUses = int(b.max_uses ?? 1, { min: 1, max: 1000, name: 'Uses' });
+  let c = str(b.code, { max: 30 }).toUpperCase().replace(/[^A-Z0-9-]/g, '');
+  if (c && c.length < 6) throw new HttpError(400, 'Custom codes need at least 6 characters.');
+  if (!c) c = `${role.slice(0, 3).toUpperCase()}-${code(6)}`;
+  if (get('SELECT code FROM invites WHERE code = ?', c)) throw new HttpError(409, 'That code already exists.');
+  run('INSERT INTO invites (code, role, max_uses, note) VALUES (?,?,?,?)', c, role, maxUses, str(b.note, { max: 120 }));
+  audit(req.user.id, 'invite.create', { code: c, role, maxUses });
+  return { invite: get('SELECT * FROM invites WHERE code = ?', c) };
+}));
+r.post('/admin/invites/:code/revoke', wrap((req) => {
+  run('UPDATE invites SET revoked = 1 WHERE code = ?', req.params.code);
+  audit(req.user.id, 'invite.revoke', { code: req.params.code });
+  return { ok: true };
+}));
+
+// ---------- teams ----------
+r.post('/admin/teams', wrap((req) => {
+  const name = str((req.body || {}).name, { max: 60, required: true, name: 'Team name' });
+  if (get('SELECT id FROM teams WHERE name = ?', name)) throw new HttpError(409, 'That team name is taken.');
+  let jc; do { jc = code(6); } while (get('SELECT id FROM teams WHERE join_code = ?', jc));
+  const info = run('INSERT INTO teams (name, join_code, table_no, created_by) VALUES (?,?,?,?)', name, jc, str(req.body.table_no, { max: 10 }), req.user.id);
+  run('INSERT INTO submissions (team_id, updated_at) VALUES (?, ?)', Number(info.lastInsertRowid), now());
+  audit(req.user.id, 'team.create', { name });
+  bus.emit('all', 'teams:update', {});
+  return { team: teamPublic(get('SELECT * FROM teams WHERE id = ?', Number(info.lastInsertRowid)), { withCode: true }) };
+}));
+
+r.patch('/admin/teams/:id', wrap((req) => {
+  const t = get('SELECT * FROM teams WHERE id = ?', Number(req.params.id));
+  if (!t) throw new HttpError(404, 'Team not found.');
+  const b = req.body || {};
+  const name = 'name' in b ? str(b.name, { max: 60, required: true, name: 'Team name' }) : t.name;
+  if (name.toLowerCase() !== t.name.toLowerCase() && get('SELECT id FROM teams WHERE name = ?', name)) throw new HttpError(409, 'That team name is taken.');
+  const lane = 'lane' in b ? str(b.lane, { max: 30 }) : t.lane;
+  if (lane && !S.getSettings().lanes.some((l) => l.id === lane)) throw new HttpError(400, 'Unknown lane.');
+  const ext = 'extension_minutes' in b ? int(b.extension_minutes, { min: 0, max: 240, name: 'Extension' }) : t.extension_minutes;
+  run('UPDATE teams SET name = ?, lane = ?, table_no = ?, extension_minutes = ? WHERE id = ?', name, lane,
+    'table_no' in b ? str(b.table_no, { max: 10 }) : t.table_no, ext, t.id);
+  if (ext !== t.extension_minutes) {
+    const nt = get('SELECT * FROM teams WHERE id = ?', t.id);
+    if (!S.isFrozen(nt)) run('UPDATE submissions SET repo_final = 0 WHERE team_id = ?', t.id);
+    run('INSERT INTO submission_log (team_id, user_id, action, detail) VALUES (?,?,?,?)', t.id, req.user.id, 'freeze.extension', `${ext} minutes`);
+  }
+  audit(req.user.id, 'team.update', { id: t.id, name, lane, ext });
+  bus.emit(`team:${t.id}`, 'team:update', {});
+  bus.emit('all', 'teams:update', {});
+  return { ok: true };
+}));
+
+r.delete('/admin/teams/:id', wrap((req) => {
+  const t = get('SELECT * FROM teams WHERE id = ?', Number(req.params.id));
+  if (!t) throw new HttpError(404, 'Team not found.');
+  const members = all('SELECT id FROM users WHERE team_id = ?', t.id);
+  tx(() => {
+    run('UPDATE users SET team_id = NULL WHERE team_id = ?', t.id);
+    run('DELETE FROM teams WHERE id = ?', t.id);
+  });
+  source.purgeTeam(t.id);
+  audit(req.user.id, 'team.delete', { id: t.id, name: t.name });
+  for (const m of members) bus.syncUser(m.id);
+  bus.emit(`team:${t.id}`, 'team:update', {});
+  bus.emit('all', 'teams:update', {});
+  return { ok: true };
+}));
+
+// ---------- validation (4:30–5:00) ----------
+r.put('/admin/validation/:teamId', wrap((req) => {
+  const t = teamExists(req.params.teamId);
+  const b = req.body || {};
+  const f = (k) => (b[k] ? 1 : 0);
+  run(`INSERT INTO validations (team_id, links_ok, video_ok, brief_ok, disclosure_ok, eligibility_ok, notes, validated_by, updated_at)
+       VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(team_id) DO UPDATE SET links_ok = excluded.links_ok, video_ok = excluded.video_ok,
+       brief_ok = excluded.brief_ok, disclosure_ok = excluded.disclosure_ok, eligibility_ok = excluded.eligibility_ok,
+       notes = excluded.notes, validated_by = excluded.validated_by, updated_at = excluded.updated_at`,
+  t, f('links_ok'), f('video_ok'), f('brief_ok'), f('disclosure_ok'), f('eligibility_ok'), str(b.notes, { max: 1000 }), req.user.id, now());
+  audit(req.user.id, 'validation', { team: t });
+  return { validation: get('SELECT * FROM validations WHERE team_id = ?', t) };
+}));
+
+r.post('/admin/snapshot/:teamId', wrap(async (req) => { await adminSnapshot(Number(req.params.teamId), req.user.id); return { ok: true }; }));
+r.post('/admin/snapshot-all', wrap(async (req) => {
+  const results = [];
+  for (const t of all("SELECT t.id, t.name FROM teams t JOIN submissions s ON s.team_id = t.id WHERE s.repo_url != ''")) {
+    try { await adminSnapshot(t.id, req.user.id); results.push({ team: t.name, ok: true }); }
+    catch (e) { results.push({ team: t.name, ok: false, error: e.message }); }
+  }
+  return { results };
+}));
+
+// ---------- scoring ----------
+r.get('/admin/tabulation', wrap(() => {
+  const tab = tabulate();
+  const awards = Object.fromEntries(all('SELECT * FROM awards').map((a) => [a.award, a]));
+  return { ...tab, awards, settings: S.getSettings() };
+}));
+r.get('/admin/scorecards/:teamId', wrap((req) => ({
+  cards: all('SELECT s.*, u.name AS judge FROM scores s JOIN users u ON u.id = s.judge_id WHERE s.team_id = ? ORDER BY u.name', Number(req.params.teamId)),
+})));
+r.put('/admin/scores/:judgeId/:teamId/exclude', wrap((req) => {
+  run('UPDATE scores SET excluded = ? WHERE judge_id = ? AND team_id = ?', (req.body || {}).excluded ? 1 : 0, Number(req.params.judgeId), Number(req.params.teamId));
+  audit(req.user.id, 'score.exclude', { judge: req.params.judgeId, team: req.params.teamId, excluded: !!req.body.excluded });
+  return { ok: true };
+}));
+r.put('/admin/awards/:award', wrap((req) => {
+  const award = req.params.award;
+  if (!S.getSettings().awards.some((a) => a.id === award)) throw new HttpError(404, 'Unknown award.');
+  const b = req.body || {};
+  const teamId = b.team_id ? teamExists(b.team_id) : null;
+  if (teamId && S.getSettings().one_prize_per_team) {
+    const other = get('SELECT award FROM awards WHERE team_id = ? AND award != ?', teamId, award);
+    if (other && !b.allowDuplicate) throw new HttpError(409, `That team already has the "${other.award}" award (one prize per team).`);
+  }
+  run('INSERT INTO awards (award, team_id, rationale) VALUES (?,?,?) ON CONFLICT(award) DO UPDATE SET team_id = excluded.team_id, rationale = excluded.rationale',
+    award, teamId, str(b.rationale, { max: 400 }));
+  audit(req.user.id, 'award', { award, teamId });
+  return { ok: true };
+}));
+
+// ---------- announcements ----------
+r.post('/admin/announce', wrap((req) => {
+  const body = str((req.body || {}).body, { max: 4000, required: true, name: 'Announcement' });
+  const m = postMessage(req.user, 'announcements', body);
+  bus.emit('all', 'announce', m);
+  return { message: m };
+}));
+
+// ---------- exports ----------
+const csvCell = (v) => {
+  let s = v == null ? '' : String(v);
+  if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`; // block spreadsheet formula injection
+  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+};
+const toCsv = (rows, cols) => [cols.join(','), ...rows.map((r2) => cols.map((c) => csvCell(r2[c])).join(','))].join('\r\n');
+r.get('/admin/export/:what', (req, res, next) => {
+  try {
+    let rows, cols;
+    const what = req.params.what.replace(/\.csv$/, '');
+    if (what === 'scores') {
+      rows = all(`SELECT t.name AS team, u.name AS judge, s.innovation, s.impact, s.technical, s.usability, s.presentation, s.adj_technical, s.adj_presentation,
+        s.submitted, s.excluded, s.strength, s.risk, s.next_step, s.adj_note, s.updated_at FROM scores s JOIN teams t ON t.id = s.team_id JOIN users u ON u.id = s.judge_id ORDER BY t.name, u.name`);
+      cols = ['team', 'judge', 'innovation', 'impact', 'technical', 'usability', 'presentation', 'adj_technical', 'adj_presentation', 'submitted', 'excluded', 'strength', 'risk', 'next_step', 'adj_note', 'updated_at'];
+    } else if (what === 'results') {
+      rows = tabulate().rows.map((x) => ({ rank: x.rank || '', team: x.team, project: x.project_title, average: x.average, ...x.criteria, judges: x.totals.length, flags: x.flags.join('; ') }));
+      cols = ['rank', 'team', 'project', 'average', 'innovation', 'impact', 'technical', 'usability', 'presentation', 'judges', 'flags'];
+    } else if (what === 'teams') {
+      rows = all(`SELECT t.name AS team, t.table_no, t.lane, t.join_code, u.name, u.email, u.major, u.class_level, u.preferred_role, u.checked_in
+        FROM teams t LEFT JOIN users u ON u.team_id = t.id ORDER BY t.name, u.name`);
+      cols = ['team', 'table_no', 'lane', 'join_code', 'name', 'email', 'major', 'class_level', 'preferred_role', 'checked_in'];
+    } else if (what === 'users') {
+      rows = all('SELECT u.name, u.email, u.role, t.name AS team, u.major, u.class_level, u.skills, u.preferred_role, u.checked_in, u.disabled, u.created_at FROM users u LEFT JOIN teams t ON t.id = u.team_id ORDER BY u.role, u.name');
+      cols = ['name', 'email', 'role', 'team', 'major', 'class_level', 'skills', 'preferred_role', 'checked_in', 'disabled', 'created_at'];
+    } else if (what === 'mentor-log') {
+      rows = all(`SELECT h.created_at, t.name AS team, h.kind, h.summary, h.status, m.name AS mentor, h.mentor_note, h.resolved_at
+        FROM help_requests h JOIN teams t ON t.id = h.team_id LEFT JOIN users m ON m.id = h.mentor_id ORDER BY h.id`);
+      cols = ['created_at', 'team', 'kind', 'summary', 'status', 'mentor', 'mentor_note', 'resolved_at'];
+    } else if (what === 'submission-log') {
+      rows = all('SELECT l.created_at, t.name AS team, u.name AS user, l.action, l.detail FROM submission_log l LEFT JOIN teams t ON t.id = l.team_id LEFT JOIN users u ON u.id = l.user_id ORDER BY l.id');
+      cols = ['created_at', 'team', 'user', 'action', 'detail'];
+    } else throw new HttpError(404, 'Unknown export.');
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="hakrathon-${what}-${new Date().toISOString().slice(0, 10)}.csv"`);
+    res.send('﻿' + toCsv(rows, cols));
+  } catch (e) { next(e); }
+});
+
+r.get('/admin/audit', wrap(() => ({ audit: all('SELECT a.*, u.name FROM audit a LEFT JOIN users u ON u.id = a.user_id ORDER BY a.id DESC LIMIT 300') })));
+
+module.exports = { router: r };
