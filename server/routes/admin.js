@@ -1,8 +1,9 @@
 'use strict';
 const express = require('express');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
-const { get, all, run, tx, audit } = require('../db');
+const { get, all, run, tx, audit, DATA_DIR } = require('../db');
 const A = require('../auth');
 const S = require('../settings');
 const runner = require('../runner');
@@ -284,6 +285,74 @@ const csvCell = (v) => {
   return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 };
 const toCsv = (rows, cols) => [cols.join(','), ...rows.map((r2) => cols.map((c) => csvCell(r2[c])).join(','))].join('\r\n');
+// ---------- rehearsal checklist (Nov 5): what can be checked automatically, plus manual ticks ----------
+const REHEARSAL_MANUAL = [
+  ['lan', 'A phone on the event Wi-Fi opened the “Same Wi-Fi” address and signed in'],
+  ['ngrok', 'If Wi-Fi blocks devices: share-online.bat link tested from a phone (skip if LAN works)'],
+  ['testsub', 'A test team made a full submission: repo snapshot, video, brief, disclosures'],
+  ['testrun', 'Run in the code editor and a judge “Run it in the sandbox” both worked'],
+  ['testscore', 'A judge test-scored the test team; test team then deleted'],
+  ['offline', 'Offline judging package built and opened from a USB stick'],
+  ['power', 'Laptop plugged in; Windows sleep set to Never; updates paused'],
+  ['backup', 'backup.bat ran and the backup copy exists'],
+  ['demo', 'demo.bat window closed'],
+];
+function rehearsalAuto() {
+  const st = S.getSettings();
+  const n = (sql, ...a) => get(sql, ...a).c;
+  const personal = n("SELECT COUNT(*) AS c FROM invites WHERE role = 'participant' AND email != '' AND revoked = 0");
+  const shared = n("SELECT COUNT(*) AS c FROM invites WHERE role = 'participant' AND email = '' AND revoked = 0 AND uses < max_uses");
+  const judges = n("SELECT COUNT(*) AS c FROM users WHERE role = 'judge' AND disabled = 0");
+  const judgeCodes = n("SELECT COUNT(*) AS c FROM invites WHERE role = 'judge' AND revoked = 0 AND uses < max_uses");
+  const mentors = n("SELECT COUNT(*) AS c FROM users WHERE role = 'mentor' AND disabled = 0");
+  const mentorCodes = n("SELECT COUNT(*) AS c FROM invites WHERE role = 'mentor' AND revoked = 0 AND uses < max_uses");
+  const teams = all('SELECT name, table_no FROM teams');
+  const noTable = teams.filter((t) => !String(t.table_no || '').trim());
+  const r = runner.runnerStatus();
+  const T = (k) => Date.parse(st[k]);
+  const order = ['roster_lock_at', 'cp1_at', 'cp2_at', 'build_freeze_at', 'validation_end_at'];
+  const ordered = order.every((k, i) => i === 0 || T(order[i - 1]) < T(k));
+  const day = new Date(T('build_freeze_at')).toLocaleDateString('en-US', { timeZone: 'America/New_York', weekday: 'long', month: 'short', day: 'numeric' });
+  let backupAt = null;
+  try {
+    const dir = path.join(DATA_DIR, 'backups');
+    for (const f of fs.readdirSync(dir)) { const m = fs.statSync(path.join(dir, f)).mtimeMs; if (!backupAt || m > backupAt) backupAt = m; }
+  } catch {}
+  let freeGB = null;
+  try { const sf = fs.statfsSync(DATA_DIR); freeGB = (sf.bavail * sf.bsize) / 1e9; } catch {}
+  const off = offline.info();
+  return [
+    { id: 'codes', label: 'Participant access codes made', ok: personal + shared > 0, detail: `${personal} personal, ${shared} shared` },
+    { id: 'judges', label: `Judges registered (minimum ${st.min_judges})`, ok: judges >= st.min_judges, detail: `${judges} registered, ${judgeCodes} unused judge code${judgeCodes === 1 ? '' : 's'}` },
+    { id: 'mentors', label: 'Mentors registered', ok: mentors > 0, detail: `${mentors} registered, ${mentorCodes} unused mentor code${mentorCodes === 1 ? '' : 's'}` },
+    { id: 'tables', label: 'Every team has a table number', ok: teams.length > 0 && !noTable.length, info: !teams.length, detail: teams.length ? (noTable.length ? `Missing: ${noTable.slice(0, 5).map((t) => t.name).join(', ')}${noTable.length > 5 ? '…' : ''}` : `${teams.length} teams`) : 'No teams yet (they form at 8:35 on the day)' },
+    { id: 'runner', label: 'Code runner ready (Docker sandbox)', ok: !!r.ready && runner.MODE === 'docker', detail: r.ready ? (runner.MODE === 'docker' ? 'Ready' : `Mode ${runner.MODE}: not safe for students`) : r.reason || 'Not ready' },
+    { id: 'times', label: 'Event times in order (roster lock → CP1 → CP2 → freeze → validation)', ok: ordered, detail: `Freeze ${day} ${new Date(T('build_freeze_at')).toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit' })}` },
+    { id: 'future', label: 'Build freeze is still ahead', ok: T('build_freeze_at') > Date.now() },
+    { id: 'states', label: 'Judging, Q&A and results are switched off before the event', ok: !st.judging_open && !st.finalists_open && !st.results_published },
+    { id: 'domains', label: 'Participant email domains set', ok: !!String(st.participant_email_domains || '').trim(), detail: st.participant_email_domains || 'Anyone can register with a participant code' },
+    { id: 'notdemo', label: 'This is the real event server (not the demo)', ok: !st.is_demo },
+    { id: 'backup', label: 'A backup was made in the last 24 hours', ok: !!backupAt && Date.now() - backupAt < 86400000, warn: true, detail: backupAt ? `Last ${new Date(backupAt).toLocaleString('en-US', { timeZone: 'America/New_York' })}` : 'No backup yet: run backup.bat' },
+    { id: 'disk', label: 'At least 10 GB free for videos and snapshots', ok: freeGB == null || freeGB >= 10, warn: true, detail: freeGB == null ? 'Unknown' : `${freeGB.toFixed(0)} GB free` },
+    { id: 'offline', label: 'Offline judging package built at least once', ok: !!off.built_at, warn: true, detail: off.built_at ? `Built ${new Date(off.built_at).toLocaleString('en-US', { timeZone: 'America/New_York' })}` : 'Admin → Overview → Build offline package' },
+  ];
+}
+r.get('/admin/rehearsal', wrap((req) => {
+  const port = Number(process.env.PORT) || 3000;
+  const lan = Object.values(os.networkInterfaces()).flat().filter((i) => i && i.family === 'IPv4' && !i.internal).map((i) => `http://${i.address}:${port}`);
+  const ticks = S.getSettings().rehearsal || {};
+  return { auto: rehearsalAuto(), manual: REHEARSAL_MANUAL.map(([id, label]) => ({ id, label, ...(ticks[id] || { done: false }) })), lan, public_url: process.env.PUBLIC_URL || '' };
+}));
+r.put('/admin/rehearsal/:id', wrap((req) => {
+  const id = req.params.id;
+  if (!REHEARSAL_MANUAL.some(([k]) => k === id)) throw new HttpError(404, 'Unknown checklist item.');
+  const ticks = { ...(S.getSettings().rehearsal || {}) };
+  ticks[id] = (req.body || {}).done ? { done: true, by: req.user.name, at: now() } : { done: false };
+  S.setSettings({ rehearsal: ticks });
+  audit(req.user.id, 'rehearsal.tick', { id, done: !!ticks[id].done });
+  return { ok: true };
+}));
+
 // Offline judging package (if the network dies): a folder of static pages to copy to a USB stick.
 r.get('/admin/offline-package', wrap(() => offline.info()));
 r.post('/admin/offline-package', wrap(async (req) => {

@@ -172,7 +172,7 @@ input[disabled], select[disabled], textarea[disabled], textarea[readonly] { back
 .badge.gold { background: var(--gold-soft); color: var(--gold-ink); border-color: transparent; }
 .role-admin { color: var(--bad); } .role-judge { color: var(--gold-ink); } .role-mentor { color: var(--ok); }
 .checklist { list-style: none; padding: 0; margin: 0; }
-.checklist li { display: flex; gap: 10px; align-items: flex-start; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: .92rem; }
+.checklist li { position: relative; display: flex; gap: 10px; align-items: flex-start; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: .92rem; }
 .checklist li:last-child { border-bottom: 0; }
 .tick { flex: none; width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; font-size: .72rem; font-weight: 800; margin-top: 1px; }
 .tick.ok { background: var(--ok-solid); color: #fff; }
@@ -187,7 +187,7 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: .9rem; }
 .tbl td { padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
 .tbl tr:hover td { background: var(--panel-2); }
 .tbl .num { text-align: right; font-variant-numeric: tabular-nums; }
-.table-wrap { overflow-x: auto; }
+.table-wrap { overflow-x: auto; position: relative; }
 
 .empty { text-align: center; padding: 36px 16px; color: var(--ink-3); }
 .empty .big { font-size: 2rem; margin-bottom: 6px; }
@@ -223,7 +223,7 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: .9rem; }
 .chat-side h4 { font-size: .74rem; text-transform: uppercase; letter-spacing: .08em; color: var(--ink-3); margin: 10px 8px 6px; }
 .chan { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 10px; border-radius: 8px; border: 0; background: none; color: var(--ink-2); font: 600 .92rem var(--sans); cursor: pointer; text-align: left; }
 .chan:hover { background: var(--panel-2); }
-.chan.on { background: rgba(45,91,255,.12); color: var(--blue); }
+.chan.on { background: rgba(45,91,255,.12); color: var(--blue-ink); }
 .chan .unread { margin-left: auto; background: var(--gold); color: var(--navy); border-radius: 99px; font-size: .72rem; padding: 0 7px; font-weight: 800; }
 .chat-main { display: flex; flex-direction: column; min-width: 0; background: var(--bg); }
 .chat-head { padding: 12px 18px; border-bottom: 1px solid var(--line); background: var(--panel); }
@@ -254,7 +254,7 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: .9rem; }
 .ws-files .list { overflow-y: auto; flex: 1; padding: 6px; }
 .file { display: flex; align-items: center; gap: 7px; padding: 6px 8px; border-radius: 6px; cursor: pointer; font: .87rem var(--mono); color: var(--ink-2); }
 .file:hover { background: var(--panel-2); }
-.file.on { background: rgba(45,91,255,.12); color: var(--blue); }
+.file.on { background: rgba(45,91,255,.12); color: var(--blue-ink); }
 .file .dirty { color: var(--gold); font-weight: 800; }
 .file .who { margin-left: auto; display: flex; gap: 2px; }
 .file .who i { width: 18px; height: 18px; border-radius: 50%; background: var(--gold); color: var(--navy); font: 700 .6rem var(--sans); display: grid; place-items: center; font-style: normal; }
@@ -274,9 +274,9 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: .9rem; }
 /* ---------- source browser ---------- */
 .browser { display: grid; grid-template-columns: 260px minmax(0, 1fr); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; min-height: 420px; background: var(--panel); }
 .browser .tree { border-right: 1px solid var(--line); overflow: auto; max-height: 620px; padding: 6px; font: .84rem var(--mono); }
-.browser .tree .node { padding: 4px 8px; border-radius: 5px; cursor: pointer; white-space: nowrap; color: var(--ink-2); }
+.browser .tree .node { display: block; width: 100%; text-align: left; background: none; border: 0; font: inherit; padding: 4px 8px; border-radius: 5px; cursor: pointer; white-space: nowrap; color: var(--ink-2); }
 .browser .tree .node:hover { background: var(--panel-2); }
-.browser .tree .node.on { background: rgba(45,91,255,.12); color: var(--blue); }
+.browser .tree .node.on { background: rgba(45,91,255,.12); color: var(--blue-ink); }
 .browser .tree .node.dir { color: var(--ink); font-weight: 600; cursor: default; }
 .browser .view { overflow: auto; max-height: 620px; }
 .browser pre { margin: 0; padding: 14px; font-size: .84rem; line-height: 1.5; }

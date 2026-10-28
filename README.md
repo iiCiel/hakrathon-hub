@@ -9,9 +9,9 @@ Team portal for HAkrathon 2026 (UA College of Business, Nov 6). Built around the
 | Participant | Create/join a team (3–5), pick a lane, submit Checkpoint 1 & 2, team chat, shared code editor that runs Python / JavaScript / C / C++ / Java / Bash, request a mentor, submit the package (GitHub repo snapshot or zip, live link, 5-min video, brief, disclosures, backup evidence) |
 | Mentor | Help queue (claim → go to table → resolve with a log note), read-only view of any team's code |
 | Judge | After freeze: browse each team's repo/zip, run it in the sandbox, watch the video (auto-stops at 5:00), score 1–10 on the rubric with notes, declare conflicts, finalist Q&A adjustments (Technical + Presentation only) |
-| Admin | Access codes, people, teams/tables, event times and schedule, announcements (pop up on every screen), staff validation checklist, per-team or global freeze extensions, tabulation with tie-breakers and flags, awards (one prize per team), publish results, CSV exports, audit log |
+| Admin | Rehearsal checklist, access codes, people, teams/tables, event times and schedule, announcements (pop up on every screen), staff validation checklist, per-team or global freeze extensions, tabulation with tie-breakers and flags, awards (one prize per team), publish results, CSV exports, offline judging package, audit log |
 
-Everything updates live (chat, files, help queue, submissions). Code and submissions lock automatically at the build freeze, and the official repo snapshot (exact commit SHA) is taken at that moment.
+Everything updates live (chat, files, help queue, submissions). Code and submissions lock automatically at the build freeze, and the official repo snapshot is taken then: the last commit made before the freeze, with its exact SHA.
 
 ## Run it (Windows)
 
@@ -28,13 +28,14 @@ Everything updates live (chat, files, help queue, submissions). Code and submiss
 
 | When | In the portal |
 |---|---|
-| Nov 5 rehearsal | `demo.bat` walkthrough; real server: create codes, set table numbers, confirm runner is "Ready" |
+| Nov 5 rehearsal | `demo.bat` walkthrough; real server: Admin → **Rehearsal** and work down both lists |
 | 7:30 check-in | Hand out the participant code; tick "Checked in" in People |
 | 8:20 | Event & schedule → tick **Challenge released**; post an announcement |
 | 9:15 | Rosters lock automatically; place stragglers via People or Overview |
 | 10:00 / 3:15 | Checkpoints due (late ones are flagged) |
 | Network down > 30 min | Event & schedule → global freeze extension, then announce it |
 | 4:30 | Freeze is automatic; repo snapshots are taken; Overview shows who's complete |
+| ~4:35 | Overview → **Build offline judging package** (copy the folder to a USB stick in case the network dies) |
 | 4:30–5:00 | Review each team → Staff validation checklist |
 | 5:00 | Scoring → **Primary judging open** |
 | 6:10 | Scoring → check flags, **Mark top 3 as finalists**, open **Finalist Q&A** |
@@ -51,4 +52,4 @@ Everything lives in `data\` (SQLite database, uploads, repo snapshots). `backup.
 
 ## Development
 
-`npm test` runs the end-to-end API suite (accounts, teams, chat isolation, help queue, workspace conflicts, sandbox, zip safety, freeze, judging math, tie-breaks, awards, exports). Node 22.13+.
+`npm test` runs the end-to-end API suite (accounts, teams, chat isolation, help queue, workspace conflicts, sandbox, zip safety, freeze, judging math, tie-breaks, awards, exports, offline package). `npm run loadtest` starts a throwaway copy and runs 50 simulated students (chat, autosave, runs) for 10 minutes, then prints response times (set `STUDENTS` and `MINUTES` to change it). Node 22.13+.

@@ -4,7 +4,7 @@ import { state, laneName } from './app.js';
 
 // Browse a repo snapshot or extracted zip: file tree on the left, highlighted file or README on the right.
 export function sourceBrowser(teamId, kind) {
-  const tree = h('div', { class: 'tree', role: 'tree', 'aria-label': 'Files' });
+  const tree = h('nav', { class: 'tree', 'aria-label': 'Files' });
   const view = h('div', { class: 'view' }, h('div', { class: 'loading' }, h('span', { class: 'spinner' })));
   const box = h('div', { class: 'browser' }, tree, view);
   let readmeHtml = '';
@@ -14,18 +14,25 @@ export function sourceBrowser(teamId, kind) {
       const d = await api.get(`/api/source/${teamId}/${kind}/tree`);
       readmeHtml = d.readme;
       if (!d.tree) { clear(box, h('div', { class: 'empty', style: { gridColumn: '1 / -1' } }, 'Nothing uploaded yet.')); return; }
-      clear(tree, h('div', { class: 'node on', role: 'treeitem', tabindex: 0, onclick: (e) => { select(e.currentTarget); showReadme(); } }, '📘 README'),
+      // Files are plain buttons in a list (Tab/Enter/Space work); folders are labels. Up/Down also move.
+      clear(tree, h('button', { type: 'button', class: 'node on', 'aria-current': 'true', onclick: (e) => { select(e.currentTarget); showReadme(); } }, '📘 README'),
         d.tree.map((n) => {
           const depth = n.path.split('/').length - 1;
           const name = n.path.split('/').pop();
-          if (n.dir) return h('div', { class: 'node dir', style: { paddingLeft: `${8 + depth * 14}px` } }, '📁 ', name, n.skipped ? h('span', { class: 'faint' }, ' (hidden)') : null);
-          return h('div', { class: 'node', role: 'treeitem', tabindex: 0, style: { paddingLeft: `${8 + depth * 14}px` }, title: `${n.path} · ${fmtBytes(n.size)}`,
-            onclick: (e) => { select(e.currentTarget); openFile(n.path); }, onkeydown: (e) => { if (e.key === 'Enter') e.currentTarget.click(); } }, name);
+          if (n.dir) return h('div', { class: 'node dir', style: { paddingLeft: `${8 + depth * 14}px` } }, h('span', { 'aria-hidden': 'true' }, '📁 '), name, '/', n.skipped ? h('span', { class: 'faint' }, ' (hidden)') : null);
+          return h('button', { type: 'button', class: 'node', style: { paddingLeft: `${8 + depth * 14}px` }, title: `${n.path} · ${fmtBytes(n.size)}`, 'aria-label': n.path,
+            onclick: (e) => { select(e.currentTarget); openFile(n.path); } }, name);
         }));
       showReadme();
     } catch (e) { clear(view, h('div', { class: 'empty' }, e.message)); }
   })();
-  function select(el) { for (const x of tree.querySelectorAll('.node.on')) x.classList.remove('on'); el.classList.add('on'); }
+  function select(el) { for (const x of tree.querySelectorAll('.node.on')) { x.classList.remove('on'); x.removeAttribute('aria-current'); } el.classList.add('on'); el.setAttribute('aria-current', 'true'); }
+  tree.addEventListener('keydown', (e) => {
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+    const btns = [...tree.querySelectorAll('button.node')], i = btns.indexOf(document.activeElement);
+    if (i < 0) return;
+    e.preventDefault(); btns[Math.max(0, Math.min(btns.length - 1, i + (e.key === 'ArrowDown' ? 1 : -1)))].focus();
+  });
   async function openFile(p) {
     clear(view, h('div', { class: 'loading' }, h('span', { class: 'spinner' })));
     try {

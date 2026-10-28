@@ -135,7 +135,7 @@ function cpForm(kind, existing, isFrozen, redraw) {
   h('div', { class: 'card-head' }, h('h2', null, spec.title),
     existing ? badge(existing.late ? `Submitted late · ${fmtTime(existing.submitted_at)}` : `Submitted ${fmtTime(existing.submitted_at)}`, existing.late ? 'warn' : 'ok')
       : badge(`Due ${fmtTime(due.toISOString())}`, now() > due.getTime() ? 'bad' : 'blue')),
-  existing ? h('p', { class: 'faint' }, `Submitted by ${existing.submitted_by} at ${fmtDateTime(existing.submitted_at)}.`,
+  existing ? h('p', { class: 'faint' }, `Submitted${existing.submitted_by ? ` by ${existing.submitted_by}` : ''} at ${fmtDateTime(existing.submitted_at)}.`,
     existing.updated_at ? ` Last edited by ${existing.updated_by || 'a teammate'} at ${fmtDateTime(existing.updated_at)}.` : '',
     ' You can edit it until build freeze; edits keep the original submission time.') : null,
   spec.fields.map(([k, label, hint, multi, max]) => field(label,

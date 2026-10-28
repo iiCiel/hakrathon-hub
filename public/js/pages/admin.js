@@ -2,12 +2,12 @@ import { h, clear, field, toast, busy, confirmBox, modal, promptBox, fmtTime, fm
 import { api } from '../api.js';
 import { state, on, role, go, loadMe, renderChrome, laneName } from '../app.js';
 
-const TABS = [['overview', 'Overview'], ['event', 'Event & schedule'], ['people', 'People'], ['codes', 'Access codes'], ['scoring', 'Scoring & awards'], ['audit', 'Audit log']];
+const TABS = [['overview', 'Overview'], ['rehearsal', 'Rehearsal'], ['event', 'Event & schedule'], ['people', 'People'], ['codes', 'Access codes'], ['scoring', 'Scoring & awards'], ['audit', 'Audit log']];
 
 export async function render(route) {
   if (role() !== 'admin') { go('#/'); return h('div'); }
   const tab = TABS.some(([k]) => k === route.params[0]) ? route.params[0] : 'overview';
-  const body = await ({ overview, event: eventTab, people, codes, scoring, audit })[tab]();
+  const body = await ({ overview, rehearsal, event: eventTab, people, codes, scoring, audit })[tab]();
   return h('div', null,
     h('div', { class: 'page-head' }, h('div', null, h('h1', null, 'Admin'), h('p', null, `${state.event.event_name} · event staff controls`))),
     h('nav', { class: 'tabs' }, TABS.map(([k, label]) => h('a', { href: `#/admin/${k}`, class: k === tab ? 'on' : '', 'aria-current': k === tab ? 'page' : null }, label))),
@@ -328,6 +328,37 @@ async function scoring() {
 }
 
 // ---------------- audit ----------------
+// ---------------- rehearsal checklist (Nov 5) ----------------
+async function rehearsal() {
+  const root = h('div', { class: 'stack' });
+  const draw = async () => {
+    const d = await api.get('/api/admin/rehearsal');
+    const autoOk = d.auto.filter((x) => x.ok || x.info).length, manOk = d.manual.filter((x) => x.done).length;
+    const total = d.auto.length + d.manual.length, done = autoOk + manOk;
+    clear(root,
+      h('section', { class: 'card' }, h('div', { class: 'card-head' }, h('h2', null, 'Rehearsal checklist'), badge(`${done} / ${total} ready`, done === total ? 'ok' : 'warn')),
+        h('p', { class: 'faint' }, 'Run through this at the Nov 5 rehearsal and again at 7:00 a.m. on event day. The first list checks itself every time you open this page; tick the second list as you go.'),
+        h('div', { class: 'progress', role: 'progressbar', 'aria-valuemin': 0, 'aria-valuemax': total, 'aria-valuenow': done, 'aria-label': 'Rehearsal progress' }, h('i', { style: { width: `${Math.round((done / total) * 100)}%` } }))),
+      h('div', { class: 'grid two' },
+        h('section', { class: 'card' }, h('h3', null, 'Checked automatically'),
+          h('ul', { class: 'checklist' }, d.auto.map((x) => h('li', null, tick(x.ok, !x.ok && x.warn ? 'warn' : x.info ? 'opt' : undefined),
+            h('div', null, x.label, x.detail ? h('div', { class: 'faint' }, x.detail) : null))))),
+        h('section', { class: 'card' }, h('h3', null, 'Tick when done'),
+          h('ul', { class: 'checklist' }, d.manual.map((x) => h('li', null,
+            h('label', { class: 'check', style: { width: '100%' } },
+              h('input', { type: 'checkbox', checked: !!x.done, onchange: async (e) => {
+                try { await api.put(`/api/admin/rehearsal/${x.id}`, { done: e.target.checked }); draw(); } catch (ex) { toast(ex.message, 'bad'); e.target.checked = !e.target.checked; }
+              } }),
+              h('span', null, x.label, x.done && x.by ? h('span', { class: 'faint' }, ` · ${x.by}, ${fmtDateTime(x.at)}`) : null))))))),
+      h('section', { class: 'card' }, h('h3', null, 'Addresses to test'),
+        h('p', { class: 'faint' }, 'Open one of these on a phone that is on the event Wi-Fi. If none work, campus Wi-Fi is blocking device-to-device traffic: use share-online.bat.'),
+        d.lan.length ? h('ul', null, d.lan.map((u) => h('li', null, h('code', null, u)))) : h('p', null, 'No network address found. Is the laptop on Wi-Fi?'),
+        d.public_url ? h('p', null, 'Public link (PUBLIC_URL): ', h('code', null, d.public_url)) : null));
+  };
+  await draw();
+  return root;
+}
+
 async function audit() {
   const { audit: rows } = await api.get('/api/admin/audit');
   return h('section', { class: 'card table-wrap' }, h('h2', null, 'Audit log (latest 300)'),

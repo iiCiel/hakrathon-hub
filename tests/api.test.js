@@ -335,6 +335,13 @@ test('admin tools: exports, reset password, disable', async () => {
   assert.ok(html.includes(teamA.name) && html.includes('scoresheets.html'));
   status(await admin.get('/api/admin/offline/..%2F..%2Fhakrathon.db'), 404);
   status(await p[0].get('/api/admin/offline/index.html'), 403);
+  // rehearsal checklist
+  const reh = ok(await admin.get('/api/admin/rehearsal'));
+  assert.ok(reh.auto.find((x) => x.id === 'codes').ok && reh.manual.length >= 5 && Array.isArray(reh.lan));
+  ok(await admin.put('/api/admin/rehearsal/power', { done: true }));
+  assert.equal(ok(await admin.get('/api/admin/rehearsal')).manual.find((x) => x.id === 'power').done, true);
+  status(await admin.put('/api/admin/rehearsal/nope', { done: true }), 404);
+  status(await p[0].get('/api/admin/rehearsal'), 403);
   const users = ok(await admin.get('/api/admin/users')).users;
   const u = users.find((x) => x.email === 'p4@zips.uakron.edu');
   const reset = ok(await admin.post(`/api/admin/users/${u.id}/reset-password`));

@@ -81,6 +81,7 @@ const DEFAULTS = {
   min_judges: 3,
   runner_enabled: true,
   is_demo: false,
+  rehearsal: {}, // manual rehearsal checklist ticks: { id: { done, by, at } }
 };
 
 let cache = null;

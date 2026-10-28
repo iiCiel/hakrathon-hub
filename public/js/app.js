@@ -242,6 +242,8 @@ export async function route() {
 }
 
 window.addEventListener('hashchange', route);
+// The skip link must not change the hash (the router would treat #main as a page).
+document.querySelector('a.sr[href="#main"]')?.addEventListener('click', (e) => { e.preventDefault(); const m = document.getElementById('main'); m.focus(); m.scrollIntoView(); });
 // Any button whose request fails without its own handler still tells the person why.
 window.addEventListener('unhandledrejection', (e) => { if (e.reason instanceof ApiError && e.reason.status !== 401) { toast(e.reason.message, 'bad'); e.preventDefault(); } });
 window.addEventListener('hak:unauthorized', () => { dropSocket(); if (state.me) { state.me = null; toast('Your session ended. Please sign in again.', 'bad'); location.hash = '#/login'; } });

@@ -57,6 +57,8 @@ app.use('/api', require('./routes/judge').router);
 app.use('/api', require('./routes/admin').router);
 app.use('/api', (_req, _res, next) => next(new HttpError(404, 'Not found.')));
 
+// Gzip the front end (the code editor alone is ~4 MB): matters over ngrok and busy Wi-Fi.
+app.use(require('compression')({ threshold: 1024 }));
 const nm = path.join(__dirname, '..', 'node_modules');
 const staticOpts = { maxAge: '7d', immutable: false, fallthrough: true };
 app.use('/vendor/monaco', express.static(path.join(nm, 'monaco-editor', 'min'), staticOpts));
