@@ -91,7 +91,10 @@ function safeRel(p) {
   const norm = String(p).replace(/\\/g, '/').replace(/^\/+/, '');
   if (!norm || norm.length > 200) return null;
   const parts = norm.split('/');
-  if (parts.some((s) => !s || s === '.' || s === '..' || /[\x00-\x1f:*?"<>|]/.test(s))) return null;
+  // Also reject Windows device names (CON, NUL, COM1.txt...) and segments ending in a dot or space,
+  // which Windows silently rewrites (so "a. " could alias another path).
+  if (parts.some((s) => !s || s === '.' || s === '..' || /[\x00-\x1f:*?"<>|]/.test(s) || /[. ]$/.test(s)
+    || /^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\.|$)/i.test(s))) return null;
   return parts.join('/');
 }
 
@@ -181,15 +184,19 @@ async function execute({ lang, entry, files, srcDir, command, stdin = '', timeou
   }, priority);
 }
 
+// LOCAL mode never gets the server's environment (GitHub token, OAuth secret).
+const LOCAL_ENV = Object.fromEntries(['PATH', 'Path', 'PATHEXT', 'SystemRoot', 'TEMP', 'TMP', 'HOME', 'USERPROFILE', 'LANG']
+  .filter((k) => process.env[k] !== undefined).map((k) => [k, process.env[k]]));
 async function runLocal({ L, lang, entry, src, stdin, timeoutMs, command }) {
   let child;
   if (command) {
-    child = spawn(command, { cwd: src, shell: true, windowsHide: true });
+    // Team-supplied run commands only ever run in the Docker sandbox.
+    return { stdout: '', stderr: '[runner] Running a team repository needs the Docker sandbox; LOCAL test mode only runs editor code.', exitCode: 1 };
   } else {
     if (!L.local) return { stdout: '', stderr: `[runner] ${L.name} needs Docker; LOCAL mode only runs Python, JavaScript and Java.`, exitCode: 1 };
     const [bin, pre] = L.local;
     // Java uses single-file source launch (java Main.java).
-    child = spawn(bin, [...pre, entry], { cwd: src, windowsHide: true });
+    child = spawn(bin, [...pre, entry], { cwd: src, windowsHide: true, env: LOCAL_ENV });
   }
   child.stdin.on('error', () => {});
   child.stdin.end(String(stdin));

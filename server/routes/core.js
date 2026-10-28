@@ -35,7 +35,7 @@ function publicSettings() {
     judging_open: !!s.judging_open, finalists_open: !!s.finalists_open, results_published: !!s.results_published,
     registration_open: !!s.registration_open, max_teams: s.max_teams, team_min: s.team_min, team_max: s.team_max,
     max_video_seconds: s.max_video_seconds, lanes: s.lanes, criteria: s.criteria, awards: s.awards, schedule: s.schedule,
-    runner_enabled: !!s.runner_enabled,
+    runner_enabled: !!s.runner_enabled, is_demo: !!s.is_demo,
   };
 }
 const githubEnabled = () => !!(process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET);
@@ -63,6 +63,8 @@ r.post('/auth/register', wrap((req, res) => {
     const inv = get('SELECT * FROM invites WHERE code = ?', inviteCode);
     if (!inv || inv.revoked || inv.uses >= inv.max_uses) throw new HttpError(400, 'That access code is not valid or has been used up.');
     if (inv.role === 'participant' && !S.getSettings().registration_open) throw new HttpError(403, 'Participant registration is closed.');
+    // Personal codes (bulk-created from the registration list) only work for that one email.
+    if (inv.email && inv.email.toLowerCase() !== email) throw new HttpError(400, 'That access code belongs to a different email address. Use the email you registered with.');
     if (!emailAllowed(email, inv.role)) throw new HttpError(400, `Participants must use a University of Akron email (${S.getSettings().participant_email_domains}).`);
     if (get('SELECT id FROM users WHERE email = ?', email)) throw new HttpError(409, 'An account with that email already exists. Sign in instead.');
     run('UPDATE invites SET uses = uses + 1 WHERE code = ?', inviteCode);
@@ -71,7 +73,8 @@ r.post('/auth/register', wrap((req, res) => {
       str(b.major, { max: 80 }), str(b.class_level, { max: 40 }), str(b.skills, { max: 500 }), str(b.preferred_role, { max: 80 }));
     return get('SELECT * FROM users WHERE id = ?', Number(info.lastInsertRowid));
   });
-  audit(user.id, 'register', { role: user.role, invite: inviteCode });
+  audit(user.id, 'register', { role: user.role, invite: inviteCode.slice(0, 5) + '…' });
+  if (user.role === 'admin') require('node:fs').rm(require('node:path').join(require('../db').DATA_DIR, 'ADMIN-SETUP.txt'), { force: true }, () => {});
   A.setSessionCookie(req, res, A.createSession(user.id));
   return { user: A.publicUser(user) };
 }));
@@ -79,7 +82,8 @@ r.post('/auth/register', wrap((req, res) => {
 r.post('/auth/login', wrap((req, res) => {
   const email = str((req.body || {}).email, { max: 200, required: true, name: 'Email' }).toLowerCase();
   const password = String((req.body || {}).password || '');
-  if (!A.rateLimit(`login:${req.ip}`, 600, 15 * 60000) || !A.rateLimit(`login:${email}`, 10, 15 * 60000)) {
+  // Per IP+email (so one person can't lock a classmate out), per email (slows guessing), per IP (coarse).
+  if (!A.rateLimit(`login:${req.ip}`, 600, 15 * 60000) || !A.rateLimit(`login:${req.ip}:${email}`, 10, 15 * 60000) || !A.rateLimit(`login:${email}`, 40, 15 * 60000)) {
     throw new HttpError(429, 'Too many sign-in attempts. Wait a few minutes or ask staff to reset your password.');
   }
   const u = get('SELECT * FROM users WHERE email = ?', email);
@@ -92,6 +96,7 @@ r.post('/auth/login', wrap((req, res) => {
 
 r.post('/auth/logout', wrap((req, res) => {
   A.destroySession(req.sessionToken);
+  if (req.user && bus.disconnectToken) bus.disconnectToken(req.sessionToken);
   A.clearSessionCookie(res);
   return { ok: true };
 }));
@@ -128,6 +133,7 @@ r.post('/me/password', wrap((req, res) => {
   if (!next || String(next).length < 8) throw new HttpError(400, 'New password must be at least 8 characters.');
   run('UPDATE users SET password_hash = ? WHERE id = ?', A.hashPassword(String(next)), u.id);
   A.destroyUserSessions(u.id);
+  if (bus.disconnectUser) bus.disconnectUser(u.id);
   A.setSessionCookie(req, res, A.createSession(u.id));
   return { ok: true };
 }));
@@ -305,38 +311,38 @@ r.get('/auth/github/start', wrap((req, res) => {
 }));
 
 r.get('/auth/github/callback', async (req, res) => {
-  const fail = (msg) => res.redirect(`/#/login?error=${encodeURIComponent(msg)}`);
+  const fail = (code) => res.redirect(`/#/login?error=${code}`);
   try {
     const cookie = A.parseCookies(req.headers.cookie).hak_gh || '';
     const [state, mode] = cookie.split('.');
     res.append('Set-Cookie', 'hak_gh=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0');
-    if (!state || state !== req.query.state || !req.query.code) return fail('GitHub sign-in expired. Try again.');
+    if (!state || state !== req.query.state || !req.query.code) return fail('gh_expired');
     const tokRes = await fetch('https://github.com/login/oauth/access_token', {
       method: 'POST', headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
       body: JSON.stringify({ client_id: process.env.GITHUB_CLIENT_ID, client_secret: process.env.GITHUB_CLIENT_SECRET, code: String(req.query.code) }),
     });
     const tok = await tokRes.json();
-    if (!tok.access_token) return fail('GitHub did not approve the sign-in.');
+    if (!tok.access_token) return fail('gh_denied');
     const gu = await (await fetch('https://api.github.com/user', { headers: { Authorization: `Bearer ${tok.access_token}`, 'User-Agent': 'hakrathon-hub' } })).json();
-    if (!gu || !gu.id) return fail('Could not read your GitHub profile.');
+    if (!gu || !gu.id) return fail('gh_profile');
     const ghId = String(gu.id);
     if (mode === 'link') {
-      if (!req.user) return fail('Sign in first, then link GitHub.');
+      if (!req.user) return fail('gh_signin');
       const other = get('SELECT id FROM users WHERE github_id = ? AND id != ?', ghId, req.user.id);
-      if (other) return res.redirect('/#/profile?error=' + encodeURIComponent('That GitHub account is linked to another user.'));
+      if (other) return res.redirect('/#/profile?error=' + 'gh_taken');
       run('UPDATE users SET github_id = ?, github_login = ? WHERE id = ?', ghId, gu.login, req.user.id);
       return res.redirect('/#/profile?linked=1');
     }
     const u = get('SELECT * FROM users WHERE github_id = ?', ghId);
-    if (!u) return fail('No HAkrathon account is linked to that GitHub account. Register with your access code, then link GitHub from your profile.');
-    if (u.disabled) return fail('This account is disabled. Ask event staff.');
+    if (!u) return fail('gh_nolink');
+    if (u.disabled) return fail('disabled');
     run('UPDATE users SET github_login = ? WHERE id = ?', gu.login, u.id);
     A.setSessionCookie(req, res, A.createSession(u.id));
     return res.redirect('/#/');
   } catch (e) {
     console.error('[github]', e.message);
-    return fail('GitHub sign-in failed. Try again or use your email and password.');
+    return fail('gh_failed');
   }
 });
 
-module.exports = { router: r, teamPublic, teamMembers, publicSettings, getCheckpoints, CP_FIELDS };
+module.exports = { router: r, emailAllowed, teamPublic, teamMembers, publicSettings, getCheckpoints, CP_FIELDS };

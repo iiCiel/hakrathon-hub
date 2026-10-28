@@ -75,13 +75,26 @@ app.use((err, req, res, _next) => {
 
 // ---------- realtime ----------
 const server = http.createServer(app);
-const io = new Server(server, { serveClient: true, maxHttpBufferSize: 1e5, cors: { origin: false } });
+// WebSocket upgrades ignore CORS, so check Origin ourselves: only pages served by this portal may connect.
+const io = new Server(server, {
+  serveClient: true, maxHttpBufferSize: 1e5, cors: { origin: false },
+  allowRequest: (req, cb) => {
+    const origin = req.headers.origin;
+    if (!origin) return cb(null, true); // same-origin polling from older browsers, curl
+    let host = '';
+    try { host = new URL(origin).host.toLowerCase(); } catch {}
+    const pub = process.env.PUBLIC_URL ? (() => { try { return new URL(process.env.PUBLIC_URL).host.toLowerCase(); } catch { return ''; } })() : '';
+    const ok = host && (host === String(req.headers.host || '').toLowerCase() || host === pub || host === String(req.headers['x-forwarded-host'] || '').toLowerCase());
+    cb(null, !!ok);
+  },
+});
 bus.io = io;
 
 function roomsFor(u) {
   const rooms = ['all', `user:${u.id}`];
   if (u.team_id) rooms.push(`team:${u.team_id}`);
   if (A.isStaff(u)) rooms.push('staff');
+  if (u.role === 'admin' || u.role === 'mentor') rooms.push('helpdesk');
   if (u.role === 'admin') rooms.push('admins');
   return rooms;
 }
@@ -107,6 +120,9 @@ io.on('connection', (socket) => {
     io.to(`team:${t.id}`).emit('presence', { user: { id: me.id, name: me.name }, path: p, at: Date.now() });
   });
 });
+bus.disconnectToken = async (token) => {
+  for (const s of await io.fetchSockets()) if (s.data.token && s.data.token === token) s.disconnect(true);
+};
 bus.disconnectUser = async (userId) => {
   for (const s of await io.in(`user:${userId}`).fetchSockets()) s.disconnect(true);
 };
@@ -129,15 +145,16 @@ bus.syncUser = async (userId) => {
 };
 
 // ---------- first-run admin access code ----------
+const SETUP_FILE = path.join(DATA_DIR, 'ADMIN-SETUP.txt');
 function bootstrapAdmin() {
-  if (get("SELECT id FROM users WHERE role = 'admin'")) return;
+  if (get("SELECT id FROM users WHERE role = 'admin'")) { fs.rm(SETUP_FILE, { force: true }, () => {}); return; }
   let inv = get("SELECT code FROM invites WHERE role = 'admin' AND revoked = 0 AND uses < max_uses");
   if (!inv) {
     const c = `ADMIN-${code(8)}`;
     run("INSERT INTO invites (code, role, max_uses, note) VALUES (?, 'admin', 1, 'First-run admin code')", c);
     inv = { code: c };
   }
-  fs.writeFileSync(path.join(DATA_DIR, 'ADMIN-SETUP.txt'), `Register the first admin account with this access code:\n\n  ${inv.code}\n\nDelete this file afterwards.\n`);
+  fs.writeFileSync(SETUP_FILE, `Register the first admin account with this access code:\n\n  ${inv.code}\n\nDelete this file afterwards.\n`);
   console.log(`\n  First run: register your admin account with access code  ${inv.code}\n  (also saved in data/ADMIN-SETUP.txt)\n`);
 }
 
@@ -155,6 +172,13 @@ const PORT = Number(process.env.PORT) || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
 if (require.main === module) {
   bootstrapAdmin();
+  server.on('error', (e) => {
+    if (e.code === 'EADDRINUSE') {
+      console.error(`\n  Port ${PORT} is already in use. Is another copy of the portal (or the DEMO) still running?\n  Close that window, then start this again.\n`);
+      process.exit(1);
+    }
+    throw e;
+  });
   server.listen(PORT, HOST, () => {
     const lan = Object.values(os.networkInterfaces()).flat().filter((i) => i && i.family === 'IPv4' && !i.internal).map((i) => i.address);
     console.log(`  ${S.getSettings().event_name} portal is running`);

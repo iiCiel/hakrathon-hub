@@ -3,7 +3,13 @@
 // the middle of Build Sprint 2. Lets you click through every role before the real event.
 const path = require('node:path');
 const fs = require('node:fs');
-process.env.DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '..', 'data-demo');
+// The demo never touches the real data folder, and by default only this computer can open it
+// (its accounts share a published password).
+process.env.DATA_DIR = path.resolve(process.env.DEMO_DATA_DIR || path.join(__dirname, '..', 'data-demo'));
+if (path.basename(process.env.DATA_DIR) === 'data' || fs.existsSync(path.join(process.env.DATA_DIR, 'ADMIN-SETUP.txt'))) {
+  console.error('  Refusing to run the demo in what looks like the real data folder. Use data-demo.');
+  process.exit(1);
+}
 const fresh = !fs.existsSync(path.join(process.env.DATA_DIR, 'hakrathon.db'));
 const { server } = require('../server/index.js');
 const { get, run } = require('../server/db');
@@ -11,7 +17,8 @@ const A = require('../server/auth');
 const S = require('../server/settings');
 
 const PW = 'demo-pass-2026';
-const PORT = Number(process.env.PORT) || 3000;
+const PORT = Number(process.env.DEMO_PORT) || 3100;
+const HOST = process.env.DEMO_HOST || '127.0.0.1';
 
 function user(email, name, role, extra = {}) {
   run(`INSERT INTO users (email, name, password_hash, role, agreed_rules, major, preferred_role, skills, team_id, checked_in) VALUES (?,?,?,?,1,?,?,?,?,1)`,
@@ -27,6 +34,7 @@ function seed() {
   S.setSettings({
     roster_lock_at: mv(s.roster_lock_at), cp1_at: mv(s.cp1_at), cp2_at: mv(s.cp2_at), upload_open_at: mv(s.upload_open_at),
     build_freeze_at: mv(s.build_freeze_at), validation_end_at: mv(s.validation_end_at), challenge_released: true,
+    event_name: 'HAkrathon DEMO', is_demo: true,
     schedule: s.schedule.map((x) => ({ ...x, start: mv(x.start), end: mv(x.end) })),
   });
   user('admin@demo.uakron.edu', 'Demo Admin', 'admin');
@@ -60,7 +68,8 @@ function seed() {
 }
 
 if (fresh) seed();
-server.listen(PORT, '0.0.0.0', () => {
+server.on('error', (e) => { if (e.code === 'EADDRINUSE') { console.error(`  Port ${PORT} is busy. Close the other demo window first.`); process.exit(1); } throw e; });
+server.listen(PORT, HOST, () => {
   console.log(`\n  HAkrathon DEMO running at http://localhost:${PORT}  (data: ${process.env.DATA_DIR})`);
   console.log(`  Every demo account uses the password:  ${PW}\n`);
   console.log('    Admin        admin@demo.uakron.edu');

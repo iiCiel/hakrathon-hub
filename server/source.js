@@ -68,13 +68,15 @@ async function replaceDir(finalDir, tmpDir) {
 }
 
 // Clone a public (or token-accessible) GitHub repo at its default branch head.
-async function snapshotRepo(teamId, url) {
+async function snapshotRepo(teamId, url, { useToken = false } = {}) {
   const gh = parseGithubUrl(url);
   if (!gh) throw Object.assign(new Error('Use a GitHub repository URL like https://github.com/owner/repo'), { status: 400 });
   const root = path.join(SRC_DIR, `team-${Number(teamId)}`);
   await fsp.mkdir(root, { recursive: true });
   const tmp = path.join(root, `repo-tmp-${crypto.randomBytes(4).toString('hex')}`);
-  const token = process.env.GITHUB_TOKEN;
+  // The token is only used for snapshots an admin starts, so a team can't point the portal at a
+  // private repo the token can read (another team's, or the organizer's).
+  const token = useToken ? process.env.GITHUB_TOKEN : '';
   const cloneUrl = `${gh.url}.git`;
   // Token goes in through GIT_CONFIG_* env vars: never in argv, the URL, or .git/config.
   const authEnv = token ? { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'http.https://github.com/.extraheader',
@@ -87,7 +89,8 @@ async function snapshotRepo(teamId, url) {
     fsp.rm(tmp, { recursive: true, force: true }).catch(() => {});
     const msg = /not found|could not read Username|Authentication failed|terminal prompts disabled/i.test(r.stderr)
       ? 'Repository not found or not public. Make it public (or ask staff to add access) and try again.'
-      : (r.err && r.err.killed ? 'Cloning took too long (90s limit).' : `Clone failed: ${scrub(r.stderr).slice(-300)}`);
+      : (r.err && r.err.killed ? 'Cloning took too long (90s limit).' : 'Clone failed. Check the URL and that the repository is public, then try again or ask staff.');
+    if (!/not found|terminal prompts disabled/i.test(r.stderr)) console.error(`[git] team ${teamId} clone failed: ${scrub(r.stderr).slice(-500)}`);
     throw Object.assign(new Error(msg), { status: 400 });
   }
   const sha = (await git(['rev-parse', 'HEAD'], { cwd: tmp })).stdout;
@@ -113,8 +116,9 @@ async function extractZip(teamId, zipPath) {
   if (total > MAX_BYTES) throw Object.assign(new Error('Zip unpacks to more than 300 MB.'), { status: 400 });
   // Strip a single shared top-level folder (e.g. GitHub "repo-main/").
   const names = entries.map((e) => e.entryName.replace(/\\/g, '/'));
-  const firsts = new Set(names.map((n) => n.split('/')[0]));
-  const strip = firsts.size === 1 && names.every((n) => n.includes('/')) ? [...firsts][0] + '/' : '';
+  const real = names.filter((n) => !/^([\\/]|[a-zA-Z]:)/.test(n) && !n.startsWith('__MACOSX/'));
+  const firsts = new Set(real.map((n) => n.split('/')[0]));
+  const strip = firsts.size === 1 && real.every((n) => n.includes('/')) ? [...firsts][0] + '/' : '';
   const root = path.join(SRC_DIR, `team-${Number(teamId)}`);
   await fsp.mkdir(root, { recursive: true });
   const tmp = path.join(root, `zip-tmp-${crypto.randomBytes(4).toString('hex')}`);
@@ -126,6 +130,7 @@ async function extractZip(teamId, zipPath) {
       const mode = (e.attr >>> 16) & 0o170000;
       if (mode === 0o120000) continue; // symlink
       let name = names[i];
+      if (/^([\\/]|[a-zA-Z]:)/.test(name)) continue; // absolute paths are never valid zip entries
       if (strip) name = name.slice(strip.length);
       if (name.startsWith('__MACOSX/') || name.endsWith('.DS_Store')) continue;
       const rel = safeRel(name);
@@ -199,10 +204,15 @@ function renderMarkdown(md) {
   const html = marked.parse(md, { gfm: true, breaks: false });
   return sanitizeHtml(html, {
     allowedTags: sanitizeHtml.defaults.allowedTags.concat(['img', 'h1', 'h2', 'del', 'input', 'details', 'summary']),
-    allowedAttributes: { a: ['href', 'title'], img: ['src', 'alt', 'title', 'width', 'height'], code: ['class'], input: ['type', 'checked', 'disabled'], th: ['align'], td: ['align'] },
+    allowedAttributes: { a: ['href', 'title', 'rel', 'target'], img: ['src', 'alt', 'title', 'width', 'height', 'referrerpolicy', 'loading'], code: ['class'], input: ['type', 'checked', 'disabled'], th: ['align'], td: ['align'] },
     allowedSchemes: ['http', 'https', 'mailto'],
     allowedSchemesByTag: { img: ['https'] },
-    transformTags: { a: sanitizeHtml.simpleTransform('a', { rel: 'noopener noreferrer nofollow', target: '_blank' }) },
+    transformTags: {
+      a: sanitizeHtml.simpleTransform('a', { rel: 'noopener noreferrer nofollow', target: '_blank' }),
+      img: sanitizeHtml.simpleTransform('img', { referrerpolicy: 'no-referrer', loading: 'lazy' }),
+      // Only GitHub-style task-list checkboxes; never a text or password field.
+      input: (tag, attribs) => ({ tagName: 'input', attribs: { type: 'checkbox', disabled: '', ...(attribs.checked !== undefined ? { checked: '' } : {}) } }),
+    },
   });
 }
 

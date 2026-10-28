@@ -181,7 +181,7 @@ async function codes() {
     const { invites } = await api.get('/api/admin/invites');
     clear(listBox, h('h2', null, 'Codes'), invites.length ? h('table', { class: 'tbl' }, h('thead', null, h('tr', null, ['Code', 'Role', 'Used', 'Note', ''].map((x) => h('th', null, x)))),
       h('tbody', null, invites.map((i) => h('tr', { style: i.revoked || i.uses >= i.max_uses ? { opacity: 0.5 } : null },
-        h('td', null, h('code', { style: { fontSize: '1rem' } }, i.code)), h('td', null, ROLE_LABEL[i.role]), h('td', null, `${i.uses} / ${i.max_uses}`), h('td', { class: 'faint' }, i.note),
+        h('td', null, h('code', { style: { fontSize: '1rem' } }, i.code), i.email ? h('div', { class: 'faint' }, i.email) : null), h('td', null, ROLE_LABEL[i.role]), h('td', null, `${i.uses} / ${i.max_uses}`), h('td', { class: 'faint' }, i.note),
         h('td', { class: 'num' }, h('div', { class: 'row end', style: { flexWrap: 'nowrap', gap: '4px' } },
           h('button', { class: 'btn ghost sm', onclick: () => navigator.clipboard.writeText(i.code).then(() => toast('Copied.', 'ok')) }, 'Copy'),
           !i.revoked ? h('button', { class: 'btn ghost sm', onclick: async () => { if (await confirmBox('Revoke code?', `${i.code} will stop working for new sign-ups.`, 'Revoke', true)) { await api.post(`/api/admin/invites/${encodeURIComponent(i.code)}/revoke`); draw(); } } }, 'Revoke') : badge('Revoked'))))))) : h('p', { class: 'faint' }, 'No codes yet.'));
@@ -198,8 +198,29 @@ async function codes() {
       try { const r = await api.post('/api/admin/invites', { role: roleSel.value, max_uses: Number(uses.value), note: note.value, code: custom.value }); toast(`Created ${r.invite.code}`, 'ok'); custom.value = ''; draw(); }
       catch (e) { toast(e.message, 'bad'); }
     } }, 'Create code'));
+  const emails = h('textarea', { placeholder: 'Paste emails from the registration list (one per line, or separated by commas)', style: { minHeight: '120px' } });
+  const bulkRole = h('select', null, h('option', { value: 'participant' }, 'Participant'), h('option', { value: 'judge' }, 'Judge'), h('option', { value: 'mentor' }, 'Mentor'));
+  const bulkOut = h('div', { class: 'faint', style: { marginTop: '8px' } });
+  const bulk = h('section', { class: 'card', style: { marginTop: '16px' } }, h('h2', null, 'Personal codes'),
+    h('p', { class: 'faint' }, 'One single-use code per email. A personal code only works for that email, so nobody can register as a classmate. Hand them out at check-in.'),
+    field('Role', bulkRole), field('Emails', emails),
+    h('div', { class: 'row' },
+      h('button', { class: 'btn', onclick: async (e) => {
+        const btn = e.currentTarget;
+        busy(btn, true, 'Creating…');
+        try {
+          const r = await api.post('/api/admin/invites/bulk', { role: bulkRole.value, emails: emails.value });
+          clear(bulkOut, `Created ${r.made.length} code${r.made.length === 1 ? '' : 's'}.`, r.skipped.length ? [` Skipped ${r.skipped.length}:`,
+            h('ul', { style: { margin: '4px 0 0', paddingLeft: '18px' } }, r.skipped.slice(0, 20).map((x) => h('li', null, `${x.email} — ${x.why}`))),
+            r.skipped.length > 20 ? `…and ${r.skipped.length - 20} more.` : null] : null);
+          emails.value = ''; draw();
+        } catch (ex) { toast(ex.message, 'bad'); }
+        busy(btn, false);
+      } }, 'Create personal codes'),
+      h('a', { class: 'btn secondary', href: '/api/admin/export/invites.csv' }, '⬇ Codes CSV')),
+    bulkOut);
   await draw();
-  clear(root, listBox, h('aside', null, form));
+  clear(root, listBox, h('aside', null, form, bulk));
   return root;
 }
 

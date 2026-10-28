@@ -17,12 +17,12 @@ Everything updates live (chat, files, help queue, submissions). Code and submiss
 
 1. Double-click **`start.bat`**. First run installs packages and prints a one-time admin code (also in `data\ADMIN-SETUP.txt`).
 2. Open http://localhost:3000 → **Create account** → use that code. You are now admin.
-3. Admin → **Access codes**: make one participant code (e.g. 60 uses) for check-in, and single-use codes for each judge and mentor.
+3. Admin → **Access codes**: paste the registration email list to get one personal code per student (export them as CSV to hand out at check-in), and make single-use codes for each judge and mentor. A shared multi-use code also works, but then anyone holding it could register under a classmate's email.
 4. Students on the same Wi-Fi use the "Same Wi-Fi" address printed in the window (click **Allow** on the Windows Firewall prompt the first time). Campus Wi-Fi often blocks device-to-device traffic, so test this at the rehearsal. If it's blocked, or for people off-network, run **`share-online.bat`** (ngrok) and share the https link; over ngrok, ask teams to submit demo videos as Panopto/Stream links instead of uploads.
 
 **Code runner (needs Docker Desktop):** install Docker Desktop, start it, then double-click **`setup-runner.bat`** once. Student code runs in a throwaway container with no internet, a read-only system, 384 MB memory, 128 processes and a 10 s limit (30 s for judges running a repo). Without Docker everything else works; the Run button shows that the runner is unavailable. `RUNNER=local` in `.env` runs code directly on this PC for admin testing only — never use it with students.
 
-**Try every role first:** `demo.bat` starts a separate demo (port 3000, `data-demo` folder) with sample teams, judges and a mentor; all demo passwords are `demo-pass-2026`. Close it before starting the real one.
+**Try every role first:** `demo.bat` starts a separate demo at http://localhost:3100 (`data-demo` folder, this computer only, red DEMO banner) with sample teams, judges and a mentor; all demo passwords are `demo-pass-2026`. Close it before the event.
 
 ## Event-day checklist
 
@@ -43,7 +43,7 @@ Everything updates live (chat, files, help queue, submissions). Code and submiss
 
 ## Settings
 
-Optional `.env` (copy `.env.example`): port, runner mode, GitHub sign-in (OAuth app; callback `<PUBLIC_URL>/api/auth/github/callback`), and a `GITHUB_TOKEN` for snapshotting private repos. Event times, team size, max teams, email domains (`uakron.edu, zips.uakron.edu` by default) and the schedule are edited in Admin → Event & schedule.
+Optional `.env` (copy `.env.example`): port, runner mode, GitHub sign-in (OAuth app; callback `<PUBLIC_URL>/api/auth/github/callback`), and a `GITHUB_TOKEN` for snapshotting private repos. The token is only used when an admin presses **Re-snapshot repo** on a team's review page; teams' own snapshots and the automatic freeze snapshot need public repos. Event times, team size, max teams, email domains (`uakron.edu, zips.uakron.edu` by default) and the schedule are edited in Admin → Event & schedule.
 
 ## Data and backups
 

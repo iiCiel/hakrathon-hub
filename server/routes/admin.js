@@ -5,7 +5,7 @@ const A = require('../auth');
 const S = require('../settings');
 const runner = require('../runner');
 const source = require('../source');
-const { teamPublic, getCheckpoints } = require('./core');
+const { teamPublic, getCheckpoints, emailAllowed } = require('./core');
 const { postMessage } = require('./chat');
 const { completeness, subRow, adminSnapshot } = require('./submit');
 const { tabulate } = require('./judge');
@@ -128,8 +128,34 @@ r.post('/admin/invites', wrap((req) => {
   if (!c) c = `${role.slice(0, 3).toUpperCase()}-${code(6)}`;
   if (get('SELECT code FROM invites WHERE code = ?', c)) throw new HttpError(409, 'That code already exists.');
   run('INSERT INTO invites (code, role, max_uses, note) VALUES (?,?,?,?)', c, role, maxUses, str(b.note, { max: 120 }));
-  audit(req.user.id, 'invite.create', { code: c, role, maxUses });
+  audit(req.user.id, 'invite.create', { code: c.slice(0, 5) + '…', role, maxUses });
   return { invite: get('SELECT * FROM invites WHERE code = ?', c) };
+}));
+// One single-use code per email (paste the registration list). Stops anyone with a shared code
+// from registering under a classmate's address.
+r.post('/admin/invites/bulk', wrap((req) => {
+  const b = req.body || {};
+  const role = String(b.role || 'participant');
+  if (!ROLES.includes(role)) throw new HttpError(400, 'Pick a role.');
+  const emails = [...new Set(String(b.emails || '').split(/[\s,;]+/).map((e) => e.trim().toLowerCase()).filter(Boolean))];
+  if (!emails.length) throw new HttpError(400, 'Paste at least one email.');
+  if (emails.length > 300) throw new HttpError(400, 'At most 300 emails at a time.');
+  const bad = emails.filter((e) => !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e));
+  if (bad.length) throw new HttpError(400, `Not an email: ${bad.slice(0, 3).join(', ')}`);
+  const note = str(b.note, { max: 120 });
+  const made = [], skipped = [];
+  tx(() => {
+    for (const e of emails) {
+      const why = !emailAllowed(e, role) ? 'not a university email' : get('SELECT id FROM users WHERE email = ?', e) ? 'already registered'
+        : get('SELECT code FROM invites WHERE email = ? AND revoked = 0 AND uses < max_uses', e) ? 'already has a code' : '';
+      if (why) { skipped.push({ email: e, why }); continue; }
+      let c; do { c = `${role.slice(0, 3).toUpperCase()}-${code(6)}`; } while (get('SELECT code FROM invites WHERE code = ?', c));
+      run('INSERT INTO invites (code, role, max_uses, note, email) VALUES (?,?,1,?,?)', c, role, note, e);
+      made.push({ email: e, code: c });
+    }
+  });
+  audit(req.user.id, 'invite.bulk', { role, made: made.length, skipped: skipped.length });
+  return { made, skipped };
 }));
 r.post('/admin/invites/:code/revoke', wrap((req) => {
   run('UPDATE invites SET revoked = 1 WHERE code = ?', req.params.code);
@@ -273,6 +299,9 @@ r.get('/admin/export/:what', (req, res, next) => {
     } else if (what === 'users') {
       rows = all('SELECT u.name, u.email, u.role, t.name AS team, u.major, u.class_level, u.skills, u.preferred_role, u.checked_in, u.disabled, u.created_at FROM users u LEFT JOIN teams t ON t.id = u.team_id ORDER BY u.role, u.name');
       cols = ['name', 'email', 'role', 'team', 'major', 'class_level', 'skills', 'preferred_role', 'checked_in', 'disabled', 'created_at'];
+    } else if (what === 'invites') {
+      rows = all("SELECT email, code, role, note, uses, max_uses, revoked FROM invites WHERE email != '' ORDER BY email");
+      cols = ['email', 'code', 'role', 'note', 'uses', 'max_uses', 'revoked'];
     } else if (what === 'mentor-log') {
       rows = all(`SELECT h.created_at, t.name AS team, h.kind, h.summary, h.status, m.name AS mentor, h.mentor_note, h.resolved_at
         FROM help_requests h JOIN teams t ON t.id = h.team_id LEFT JOIN users m ON m.id = h.mentor_id ORDER BY h.id`);

@@ -118,6 +118,9 @@ r.put('/submission', wrap((req) => {
   const { u, t } = editable(req);
   const s = subRow(t.id);
   const b = req.body || {};
+  const isObj = (v) => v && typeof v === 'object' && !Array.isArray(v);
+  if ('brief' in b && !isObj(b.brief)) throw new HttpError(400, 'Bad brief.');
+  if ('disclosure' in b && !isObj(b.disclosure)) throw new HttpError(400, 'Bad disclosure.');
   const brief = {}, disc = {};
   const oldBrief = JSON.parse(s.brief || '{}'), oldDisc = JSON.parse(s.disclosure || '{}');
   for (const [k, label, max] of BRIEF_FIELDS) brief[k] = b.brief && k in b.brief ? str(b.brief[k], { max, name: label }) : (oldBrief[k] || '');
@@ -139,19 +142,23 @@ r.put('/submission', wrap((req) => {
 
 // Per-team lock so two teammates can't start overlapping clones.
 const cloning = new Set();
-async function doSnapshot(t, repoUrl, userId, final = false) {
+async function doSnapshot(t, repoUrl, userId, final = false, useToken = false) {
   if (cloning.has(t.id)) throw new HttpError(409, 'A snapshot is already in progress for this team.');
+  const other = get("SELECT t.name FROM submissions s JOIN teams t ON t.id = s.team_id WHERE s.team_id != ? AND lower(s.repo_url) = lower(?)", t.id, repoUrl);
+  if (other) throw new HttpError(409, 'Another team already linked that repository. Use your own team\'s repo, or ask staff.');
   cloning.add(t.id);
   try {
-    const snap = await source.snapshotRepo(t.id, repoUrl);
+    const snap = await source.snapshotRepo(t.id, repoUrl, { useToken });
     run(`UPDATE submissions SET repo_url = ?, repo_sha = ?, repo_branch = ?, repo_commit_date = ?, repo_snapshot_at = ?, repo_error = '',
          repo_final = ?, updated_at = ? WHERE team_id = ?`, snap.url, snap.sha, snap.branch, snap.commitDate, now(), final ? 1 : 0, now(), t.id);
     log(t.id, userId, final ? 'repo.final-snapshot' : 'repo.snapshot', `${snap.url}@${snap.sha}`);
     return snap;
   } catch (e) {
-    run('UPDATE submissions SET repo_url = ?, repo_error = ?, updated_at = ? WHERE team_id = ?', repoUrl, e.message, now(), t.id);
-    log(t.id, userId, final ? 'repo.final-snapshot-failed' : 'repo.snapshot-failed', e.message);
-    throw e;
+    const msg = e.status ? e.message : 'Snapshot failed on the server. Try again or ask staff.';
+    if (!e.status) console.error(`[snapshot] team ${t.id}:`, e);
+    run('UPDATE submissions SET repo_url = ?, repo_error = ?, updated_at = ? WHERE team_id = ?', repoUrl, msg, now(), t.id);
+    log(t.id, userId, final ? 'repo.final-snapshot-failed' : 'repo.snapshot-failed', msg);
+    throw e.status ? e : new HttpError(500, msg);
   } finally { cloning.delete(t.id); }
 }
 
@@ -187,6 +194,7 @@ function guardUpload(req, _res, next) {
 function runUpload(mw) {
   return (req, res, next) => mw(req, res, (err) => {
     if (err && err.code === 'LIMIT_FILE_SIZE') return next(new HttpError(413, 'That file is too large.'));
+    if (err && err.name === 'MulterError') return next(new HttpError(400, 'Upload one file in the "file" field.'));
     next(err);
   });
 }
@@ -297,7 +305,7 @@ async function adminSnapshot(teamId, userId) {
   const t = teamOr404(teamId);
   const s = subRow(t.id);
   if (!s.repo_url) throw new HttpError(400, 'Team has no repository URL.');
-  await doSnapshot(t, s.repo_url, userId, S.isFrozen(t));
+  await doSnapshot(t, s.repo_url, userId, S.isFrozen(t), true);
   audit(userId, 'repo.admin-snapshot', { team: t.id });
   changed(t);
 }

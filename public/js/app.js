@@ -128,6 +128,7 @@ function renderBanner() {
       if (t >= fz) { key = 'frozen'; node = h('div', { class: 'banner freeze' }, 'Build freeze has passed. Code and submissions are locked.'); }
       else if (fz - t < 15 * 60000) { key = 'soon'; node = h('div', { class: 'banner warn' }, `Build freeze at ${fmtTime(new Date(fz).toISOString())}. Upload everything and verify judge access now. No new features.`); }
     }
+    if (!key && state.event.is_demo) { key = 'demo'; node = h('div', { class: 'banner freeze' }, 'DEMO copy — not the real event. Nothing here is kept.'); }
     if (!key && role() === 'participant' && !state.team) { key = 'noteam'; node = h('div', { class: 'banner info' }, 'You are not on a team yet. ', h('a', { href: '#/team' }, 'Create or join one')); }
   }
   if (key === lastBannerKey) return;

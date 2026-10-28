@@ -2,6 +2,7 @@
 const express = require('express');
 const { get, all, run, audit } = require('../db');
 const A = require('../auth');
+const S = require('../settings');
 const { wrap, str, now, bus, HttpError } = require('../util');
 
 const r = express.Router();
@@ -97,20 +98,22 @@ r.post('/chat/messages/:id/pin', wrap((req) => {
 const HELP_KINDS = { technical: 'Technical', business: 'Problem / business', presentation: 'Presentation' };
 const HELP_SQL = `SELECT h.*, t.name AS team_name, t.table_no, u.name AS requester, m.name AS mentor_name
   FROM help_requests h JOIN teams t ON t.id = h.team_id JOIN users u ON u.id = h.user_id LEFT JOIN users m ON m.id = h.mentor_id`;
+const helpStaff = (u) => u.role === 'admin' || u.role === 'mentor';
 function helpShape(h, viewer) {
-  const staff = viewer.role === 'admin' || viewer.role === 'mentor';
+  const staff = helpStaff(viewer);
   return { id: h.id, team_id: h.team_id, team_name: h.team_name, table_no: h.table_no, kind: h.kind, summary: h.summary,
     status: h.status, requester: h.requester, mentor_id: h.mentor_id, mentor_name: h.mentor_name || '',
     mentor_note: staff ? h.mentor_note : '', created_at: h.created_at, claimed_at: h.claimed_at, resolved_at: h.resolved_at };
 }
 function helpChanged(h) {
-  bus.emit('staff', 'help:update', {});
+  bus.emit('helpdesk', 'help:update', {});
   bus.emit(`team:${h.team_id}`, 'help:update', {});
 }
 
 r.get('/help', wrap((req) => {
   const u = A.requireUser(req);
-  if (A.isStaff(u)) {
+  if (u.role === 'judge') throw new HttpError(403, 'The help queue is for mentors.');
+  if (helpStaff(u)) {
     const active = all(`${HELP_SQL} WHERE h.status IN ('open','claimed') ORDER BY h.id`);
     const done = all(`${HELP_SQL} WHERE h.status IN ('resolved','cancelled') ORDER BY h.id DESC LIMIT 100`);
     return { requests: active.concat(done).map((h) => helpShape(h, u)), kinds: HELP_KINDS };
@@ -122,6 +125,7 @@ r.get('/help', wrap((req) => {
 r.post('/help', wrap((req) => {
   const u = A.requireRole(req, 'participant');
   if (!u.team_id) throw new HttpError(400, 'Join a team first.');
+  if (S.isFrozen(get('SELECT * FROM teams WHERE id = ?', u.team_id))) throw new HttpError(403, 'Build freeze has passed. Ask staff at the help desk.');
   const kind = String((req.body || {}).kind || '');
   if (!HELP_KINDS[kind]) throw new HttpError(400, 'Pick a help type.');
   const summary = str(req.body.summary, { max: 500, required: true, name: 'What you need' });
@@ -130,7 +134,7 @@ r.post('/help', wrap((req) => {
   const info = run('INSERT INTO help_requests (team_id, user_id, kind, summary) VALUES (?,?,?,?)', u.team_id, u.id, kind, summary);
   const h = get(`${HELP_SQL} WHERE h.id = ?`, Number(info.lastInsertRowid));
   helpChanged(h);
-  bus.emit('staff', 'help:new', helpShape(h, u));
+  bus.emit('helpdesk', 'help:new', helpShape(h, u));
   return { request: helpShape(h, u) };
 }));
 
@@ -151,8 +155,11 @@ r.post('/help/:id/:action', wrap((req) => {
       run("UPDATE help_requests SET status = 'claimed', mentor_id = ?, claimed_at = ? WHERE id = ? AND status = 'open'", u.id, t, h.id);
     } else if (action === 'release') {
       if (h.status !== 'claimed') throw new HttpError(400, 'Not claimed.');
+      if (h.mentor_id !== u.id && u.role !== 'admin') throw new HttpError(403, 'Another mentor has this request.');
       run("UPDATE help_requests SET status = 'open', mentor_id = NULL, claimed_at = NULL WHERE id = ?", h.id);
     } else if (action === 'resolve') {
+      if (!['open', 'claimed'].includes(h.status)) throw new HttpError(409, 'This request is already closed; its log note can\'t be changed.');
+      if (h.status === 'claimed' && h.mentor_id !== u.id && u.role !== 'admin') throw new HttpError(403, 'Another mentor has this request.');
       // Mentor log entry: required short note of what was discussed (scope §10).
       const note = str((req.body || {}).note, { max: 1000, required: true, name: 'Mentor log note' });
       run("UPDATE help_requests SET status = 'resolved', mentor_id = COALESCE(mentor_id, ?), mentor_note = ?, resolved_at = ? WHERE id = ?", u.id, note, t, h.id);

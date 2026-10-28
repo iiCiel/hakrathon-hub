@@ -80,6 +80,7 @@ const DEFAULTS = {
   finalists: [],
   min_judges: 3,
   runner_enabled: true,
+  is_demo: false,
 };
 
 let cache = null;

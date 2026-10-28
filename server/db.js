@@ -194,6 +194,12 @@ CREATE TABLE IF NOT EXISTS audit (
 );
 `);
 
+// Columns added after the first release (CREATE TABLE IF NOT EXISTS won't add them to an existing file).
+function addColumn(table, col, def) {
+  if (!db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${def}`);
+}
+addColumn('invites', 'email', "TEXT DEFAULT ''");
+
 const stmtCache = new Map();
 function prep(sql) {
   let s = stmtCache.get(sql);

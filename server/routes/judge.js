@@ -20,9 +20,11 @@ const ANCHORS = [
 
 const weights = () => Object.fromEntries(S.getSettings().criteria.map((c) => [c.id, c.weight]));
 // Finalist Q&A may only adjust Technical Implementation and Final Presentation (scope §6).
+// Q&A adjustments count only while that team is a finalist.
 function effective(sc) {
+  const fin = (S.getSettings().finalists || []).includes(sc.team_id);
   return { innovation: sc.innovation, impact: sc.impact, usability: sc.usability,
-    technical: sc.adj_technical ?? sc.technical, presentation: sc.adj_presentation ?? sc.presentation };
+    technical: fin ? (sc.adj_technical ?? sc.technical) : sc.technical, presentation: fin ? (sc.adj_presentation ?? sc.presentation) : sc.presentation };
 }
 function weightedTotal(sc) {
   const w = weights(), e = effective(sc);
@@ -134,9 +136,11 @@ r.put('/judge/scores/:teamId', wrap((req) => {
   if (st.results_published) throw new HttpError(403, 'Results are published. Scores are locked.');
   if (get('SELECT 1 FROM conflicts WHERE judge_id = ? AND team_id = ?', u.id, t.id)) throw new HttpError(403, 'You declared a conflict with this team.');
   const b = req.body || {};
-  const existing = cardFor(u.id, t.id);
-  if (existing && existing.submitted && (st.finalists || []).includes(t.id) && st.finalists_open) {
-    throw new HttpError(403, 'Finalist Q&A is open: you can only adjust Technical Implementation and Final Presentation.');
+  // Primary scorecards freeze once finalist Q&A opens (the top three were picked from them).
+  if (st.finalists_open) {
+    throw new HttpError(403, (st.finalists || []).includes(t.id)
+      ? 'Finalist Q&A is open: you can only adjust Technical Implementation and Final Presentation.'
+      : 'Primary judging is closed while finalist Q&A is open. Ask the scoring lead if a card is missing.');
   }
   const submit = !!b.submitted;
   const vals = {};
@@ -164,6 +168,7 @@ r.put('/judge/adjust/:teamId', wrap((req) => {
   if (!st.finalists_open) throw new HttpError(403, 'Finalist Q&A adjustments are not open.');
   if (!(st.finalists || []).includes(t.id)) throw new HttpError(403, 'This team is not a finalist.');
   if (st.results_published) throw new HttpError(403, 'Results are published.');
+  if (get('SELECT 1 FROM conflicts WHERE judge_id = ? AND team_id = ?', u.id, t.id)) throw new HttpError(403, 'You declared a conflict with this team.');
   const card = cardFor(u.id, t.id);
   if (!card || !card.submitted) throw new HttpError(400, 'Submit your primary scorecard first.');
   const b = req.body || {};
@@ -201,7 +206,9 @@ r.get('/results', wrap((req) => {
   if (teamId) {
     // Summarized criterion feedback; raw scorecards stay internal (scope §11).
     const tab = tabulate().rows.find((x) => x.team_id === teamId);
-    const cards = all('SELECT strength, next_step FROM scores WHERE team_id = ? AND submitted = 1 AND excluded = 0', teamId);
+    // Same card set as the scores: submitted, not excluded, judge not conflicted.
+    const cards = all(`SELECT strength, next_step FROM scores s WHERE team_id = ? AND submitted = 1 AND excluded = 0
+      AND NOT EXISTS (SELECT 1 FROM conflicts c WHERE c.judge_id = s.judge_id AND c.team_id = s.team_id)`, teamId);
     if (tab) feedback = { criteria: tab.criteria, strengths: cards.map((c) => c.strength).filter(Boolean), next_steps: cards.map((c) => c.next_step).filter(Boolean) };
   }
   return { published: !!st.results_published, awards, feedback, criteria: st.criteria };

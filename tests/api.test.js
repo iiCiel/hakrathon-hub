@@ -79,6 +79,19 @@ test('accounts, invites and roles', async () => {
   // login / wrong password
   status(await new Client().post('/api/auth/login', { email: 'p0@zips.uakron.edu', password: 'nope-nope' }), 401);
   ok(await new Client().post('/api/auth/login', { email: 'P0@zips.uakron.edu', password: 'password123' }));
+  // personal codes only work for their own email
+  const bulk = ok(await admin.post('/api/admin/invites/bulk', { role: 'participant', emails: 'bound1@uakron.edu, P0@zips.uakron.edu, x@gmail.com' }));
+  assert.equal(bulk.made.length, 1); assert.deepEqual(bulk.skipped.map((x) => x.why), ['already registered', 'not a university email']);
+  status(await new Client().post('/api/auth/register', { invite: bulk.made[0].code, email: 'thief@uakron.edu', name: 'T', password: 'password123', agree: true }), 400);
+  ok(await new Client().post('/api/auth/register', { invite: bulk.made[0].code, email: 'BOUND1@uakron.edu', name: 'B', password: 'password123', agree: true }));
+  assert.ok(!fs.existsSync(path.join(DATA, 'ADMIN-SETUP.txt')), 'setup file removed once an admin exists');
+});
+
+test('socket handshake rejects foreign origins', async () => {
+  const bad = await fetch(BASE + '/socket.io/?EIO=4&transport=polling', { headers: { Origin: 'http://evil.example' } });
+  assert.equal(bad.status, 403);
+  const good = await fetch(BASE + '/socket.io/?EIO=4&transport=polling', { headers: { Origin: BASE } });
+  assert.equal(good.status, 200);
 });
 
 test('CSRF header required on writes; auth required', async () => {
@@ -155,6 +168,8 @@ test('mentor help queue', async () => {
   status(await j[1].post(`/api/help/${r.id}/claim`), 403, 'judges are not mentors');
   status(await mentor.post(`/api/help/${r.id}/resolve`, {}), 400, 'log note required');
   ok(await mentor.post(`/api/help/${r.id}/resolve`, { note: 'Asked about port conflict; pointed to docs' }));
+  status(await mentor.post(`/api/help/${r.id}/resolve`, { note: 'rewrite history' }), 409, 'log note is final');
+  status(await j[0].get('/api/help'), 403, 'judges do not see the help queue');
   const mine = ok(await p[1].get('/api/help')).requests;
   assert.equal(mine[0].status, 'resolved');
   assert.equal(mine[0].mentor_note, '', 'participants do not see mentor log');
@@ -168,6 +183,7 @@ test('workspace files, conflicts, access', async () => {
   assert.equal(c.conflict, true, 'stale write detected');
   ok(await p[1].put(`/api/workspace/${teamA.id}/file`, { path: 'main.py', content: 'print(2)\n', baseVersion: v1.version }));
   status(await p[0].put(`/api/workspace/${teamA.id}/file`, { path: '../escape.py', content: 'x' }), 400, 'path traversal');
+  for (const bad of ['CON', 'nul.txt', 'src/com1.py', 'trailing.', 'space ']) status(await p[0].put(`/api/workspace/${teamA.id}/file`, { path: bad, content: 'x' }), 400, `windows name ${bad}`);
   status(await p[3].get(`/api/workspace/${teamA.id}/files`), 403, 'other team');
   status(await p[3].put(`/api/workspace/${teamA.id}/file`, { path: 'a.py', content: 'x' }), 403);
   ok(await mentor.get(`/api/workspace/${teamA.id}/files`));
@@ -192,6 +208,8 @@ test('submission package: zip, uploads, fields', async () => {
   z.addFile('project-main/README.md', Buffer.from('# Zip Coders\n<script>alert(1)</script>\n[x](javascript:alert(1))\n'));
   z.addFile('project-main/evil.txt', Buffer.from('nope'));
   z.getEntries().find((e) => e.entryName.endsWith('evil.txt')).entryName = 'project-main/../../evil.txt';
+  z.addFile('abs.txt', Buffer.from('abs'));
+  z.getEntries().find((e) => e.entryName === 'abs.txt').entryName = '/tmp/abs.txt';
   const sub = ok(await p[0].upload('/api/submission/zip', 'proj.zip', z.toBuffer())).submission;
   assert.ok(sub.has_zip);
   const tree = ok(await j[0].get(`/api/source/${teamA.id}/zip/tree`).then(() => p[0].get(`/api/source/${teamA.id}/zip/tree`)));
@@ -252,7 +270,8 @@ test('judging, tie-breaks, finalists, awards, results', async () => {
   ok(await j[1].put(`/api/judge/scores/${teamA.id}`, score({ innovation: 6 })));
   ok(await j[2].put(`/api/judge/conflicts/${teamA.id}`, { conflict: true, reason: 'Mentored them' }));
   status(await j[2].put(`/api/judge/scores/${teamA.id}`, score()), 403, 'conflicted');
-  for (const c of j) ok(await c.put(`/api/judge/scores/${teamB.id}`, score({ innovation: 5, impact: 5, technical: 5, usability: 5, presentation: 5 })));
+  for (const c of j) ok(await c.put(`/api/judge/scores/${teamB.id}`, score({ innovation: 5, impact: 5, technical: 5, usability: 5, presentation: 5, strength: c === j[1] ? 'J1-CONFLICTED' : 's' })));
+  ok(await j[1].put(`/api/judge/conflicts/${teamB.id}`, { conflict: true, reason: 'Realized I advised them' }));
   const tab = ok(await admin.get('/api/admin/tabulation'));
   const a = tab.rows.find((r) => r.team_id === teamA.id), b = tab.rows.find((r) => r.team_id === teamB.id);
   // judge0: 8*2.5+8*2.5+7*2.5+6*1.5+9*1 = 75.5 ; judge1: 70.5 → 73
@@ -265,6 +284,8 @@ test('judging, tie-breaks, finalists, awards, results', async () => {
   ok(await admin.put('/api/admin/settings', { finalists: [teamA.id], finalists_open: true }));
   status(await j[0].put(`/api/judge/scores/${teamA.id}`, score()), 403, 'primary locked during Q&A');
   status(await j[0].put(`/api/judge/adjust/${teamB.id}`, { adj_technical: 10, adj_note: 'x' }), 403, 'not a finalist');
+  status(await j[2].put(`/api/judge/scores/${teamA.id}`, score()), 403, 'no new primary cards once Q&A opens');
+  status(await j[0].put(`/api/judge/scores/${teamB.id}`, score()), 403, 'non-finalist cards frozen too');
   ok(await j[0].put(`/api/judge/adjust/${teamA.id}`, { adj_technical: 9, adj_note: 'Showed live deploy' }));
   const tab2 = ok(await admin.get('/api/admin/tabulation'));
   assert.equal(tab2.rows.find((r) => r.team_id === teamA.id).average, 75.5, 'adjustment applied (+5 for judge0 → avg +2.5)');
@@ -279,6 +300,8 @@ test('judging, tie-breaks, finalists, awards, results', async () => {
   assert.equal(res.awards.find((x) => x.id === 'champion').team, 'Zip Coders');
   assert.ok(res.feedback && res.feedback.strengths.length === 2);
   assert.ok(!JSON.stringify(res).includes('Judge 0'), 'judge identities hidden');
+  const resB = ok(await p[3].get('/api/results'));
+  assert.ok(!resB.feedback.strengths.includes('J1-CONFLICTED'), 'conflicted judge feedback dropped');
   status(await j[1].put(`/api/judge/scores/${teamB.id}`, score()), 403, 'locked after publish');
 });
 
