@@ -333,7 +333,8 @@ function rehearsalAuto() {
   const T = (k) => Date.parse(st[k]);
   const order = ['roster_lock_at', 'cp1_at', 'cp2_at', 'build_freeze_at', 'validation_end_at'];
   const ordered = order.every((k, i) => i === 0 || T(order[i - 1]) < T(k));
-  const day = new Date(T('build_freeze_at')).toLocaleDateString('en-US', { timeZone: 'America/New_York', weekday: 'long', month: 'short', day: 'numeric' });
+  const freezeShown = new Date(S.displayMs(T('build_freeze_at')));
+  const day = freezeShown.toLocaleDateString('en-US', { timeZone: 'America/New_York', weekday: 'long', month: 'short', day: 'numeric' });
   let backupAt = null;
   try {
     const dir = path.join(DATA_DIR, 'backups');
@@ -348,14 +349,14 @@ function rehearsalAuto() {
     { id: 'mentors', label: 'Mentors registered', ok: mentors > 0, detail: `${mentors} registered, ${mentorCodes} unused mentor code${mentorCodes === 1 ? '' : 's'}` },
     { id: 'tables', label: 'Every team has a table number', ok: teams.length > 0 && !noTable.length, info: !teams.length, detail: teams.length ? (noTable.length ? `Missing: ${noTable.slice(0, 5).map((t) => t.name).join(', ')}${noTable.length > 5 ? '…' : ''}` : `${teams.length} teams`) : 'No teams yet (they form at 8:35 on the day)' },
     { id: 'runner', label: 'Code runner ready (Docker sandbox)', ok: !!r.ready && runner.MODE === 'docker', detail: r.ready ? (runner.MODE === 'docker' ? 'Ready' : `Mode ${runner.MODE}: not safe for students`) : r.reason || 'Not ready' },
-    { id: 'times', label: 'Event times in order (roster lock → CP1 → CP2 → freeze → validation)', ok: ordered, detail: `Freeze ${day} ${new Date(T('build_freeze_at')).toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit' })}` },
+    { id: 'times', label: 'Event times in order (roster lock → CP1 → CP2 → freeze → validation)', ok: ordered, detail: `Freeze ${day} ${freezeShown.toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit' })}` },
     { id: 'future', label: 'Build freeze is still ahead', ok: T('build_freeze_at') > Date.now() },
     { id: 'states', label: 'Judging, Q&A and results are switched off before the event', ok: !st.judging_open && !st.finalists_open && !st.results_published },
     { id: 'domains', label: 'Participant email domains set', ok: !!String(st.participant_email_domains || '').trim(), detail: st.participant_email_domains || 'Anyone can register with a participant code' },
     { id: 'notdemo', label: 'This is the real event server (not the demo)', ok: !st.is_demo },
-    { id: 'backup', label: 'A backup was made in the last 24 hours', ok: !!backupAt && Date.now() - backupAt < 86400000, warn: true, detail: backupAt ? `Last ${new Date(backupAt).toLocaleString('en-US', { timeZone: 'America/New_York' })}` : 'No backup yet: run backup.bat' },
+    { id: 'backup', label: 'A backup was made in the last 24 hours', ok: !!backupAt && Date.now() - backupAt < 86400000, warn: true, detail: backupAt ? `Last ${new Date(S.displayMs(backupAt)).toLocaleString('en-US', { timeZone: 'America/New_York' })}` : 'No backup yet: run backup.bat' },
     { id: 'disk', label: 'At least 10 GB free for videos and snapshots', ok: freeGB == null || freeGB >= 10, warn: true, detail: freeGB == null ? 'Unknown' : `${freeGB.toFixed(0)} GB free` },
-    { id: 'offline', label: 'Offline judging package built at least once', ok: !!off.built_at, warn: true, detail: off.built_at ? `Built ${new Date(off.built_at).toLocaleString('en-US', { timeZone: 'America/New_York' })}` : 'Admin → Overview → Build offline package' },
+    { id: 'offline', label: 'Offline judging package built at least once', ok: !!off.built_at, warn: true, detail: off.built_at ? `Built ${new Date(S.displayMs(Date.parse(off.built_at) || off.built_at)).toLocaleString('en-US', { timeZone: 'America/New_York' })}` : 'Admin → Overview → Build offline package' },
   ];
 }
 r.get('/admin/rehearsal', wrap((req) => {

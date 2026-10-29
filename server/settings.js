@@ -113,4 +113,12 @@ function freezeAt(team) {
 function isFrozen(team, now = Date.now()) { return now >= freezeAt(team); }
 function rosterLocked(now = Date.now()) { return now >= Date.parse(getSettings().roster_lock_at); }
 
-module.exports = { T, DEFAULTS, getSettings, setSettings, freezeAt, isFrozen, rosterLocked };
+// Demo only: turn a stored/real time (ms) into the event-day time the demo pretends it is,
+// so server-made text matches what the browser shows. On the real server the shift is never
+// applied (is_demo is false), so this returns ms unchanged.
+function displayMs(ms) {
+  const s = getSettings();
+  return s.is_demo ? ms - (Number(s.demo_shift_ms) || 0) : ms;
+}
+
+module.exports = { T, DEFAULTS, getSettings, setSettings, freezeAt, isFrozen, rosterLocked, displayMs };

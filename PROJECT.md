@@ -14,7 +14,7 @@ D:\Projects\hakrathon-hub
 ## Notes (what is done, in progress, next, issues)
 ###### Status
 Built 2026-10-28. Node 22.13+ server (server/, node:sqlite, Express, Socket.IO), plain-JS front end (public/), self-hosted Monaco + highlight.js. Folder D:\Projects\hakrathon-hub, git repo on main, no remote. Latest commit 4721ad0 (2026-10-28 night run: showcase prep).
-npm test now runs tests/api.test.js + tests/demo.test.js: 18 pass, sandbox test skipped (no Docker on this laptop).
+npm test runs tests/api.test.js + tests/demo.test.js: 19 pass, 1 skipped (sandbox, no Docker on this laptop) - verified 2026-10-28 fix-up run.
 npm run eventday (this laptop, no Docker): 146/146 pass (2026-10-28). Cloud copy with Docker earlier: 161/161.
 npm run loadtest: 50 students x 10 min, 0 errors, p99 < 30 ms.
 Skills run 2026-10-28: security-team, review-team, verify-team; QA round with 3 test agents. All findings fixed.
@@ -22,6 +22,8 @@ Skills run 2026-10-28: security-team, review-team, verify-team; QA round with 3 
 Showcase run (2026-10-28, for Soliman's showcase on Oct 29):
 - Demo clock: server/democlock.js (STAGES morning 8:40 / sprint 13:30 / prefreeze 16:20 / judging 17:15 / awards 18:55). jump() moves event settings AND all stored ISO timestamps (TIME_COLUMNS list) by the same delta and stores settings.demo_shift_ms; it sets judging_open per stage. Routes GET/POST /api/admin/demo-clock (404 unless is_demo). Admin page shows a "Demo clock" card on top when is_demo.
 - Browser shows event-day times in the demo: ui.js setDisplayShift/toDisplay; fmtTime/fmtDateTime and admin datetime inputs subtract demo_shift_ms (always 0 on the real server; /api/me sends demo_shift_ms only when is_demo).
+- Server-made text too (fix-up run): settings.displayMs(ms) subtracts demo_shift_ms only when is_demo. Used in Admin > Rehearsal (times, backup, offline details) and offline.js fmtTime. Test in tests/demo.test.js asserts 'Freeze Friday, Nov 6 4:30 PM' and the offline 'Built Nov 6, 2026, 1:3x PM'.
+- Known demo quirk (not fixed): at the 8:40 AM stage the seeded teams already show CP1/CP2 done (seed data is from 1:30 PM). Mention it or start the walkthrough at 1:30 PM.
 - scripts/demo.js: seed calls democlock.jump('sprint') before inserting rows; on restart, if the demo time is outside 7:30 AM-7:30 PM on event day it auto-resets to 1:30 PM. Seed now has: Phish Finders + RoomRadar with CP2, full package, validation, scores from judge2+judge3; open help request from RoomRadar; ZipQueue team chat. ZipQueue stays 3/8 for live demoing.
 - SHOWCASE.md: 8-minute walkthrough (two browser windows, accounts, the click order).
 - Fixed the "small leftover": app.js route() now waits (up to 6 s) for the previous render to settle before clearing page handlers, so a slow page can't attach handlers to the next one (verified in the browser: 0 leaked tick calls).

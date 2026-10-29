@@ -20,7 +20,7 @@ const TEXT_EXT = new Set(['.py', '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const safeUrl = (u) => (/^https?:\/\//i.test(String(u || '')) ? esc(u) : '');
 const slug = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'team';
-const fmtTime = (iso) => { if (!iso) return ''; try { return new Date(iso).toLocaleString('en-US', { timeZone: 'America/New_York', dateStyle: 'medium', timeStyle: 'short' }); } catch { return iso; } };
+const fmtTime = (iso) => { if (!iso) return ''; try { const ms = Date.parse(iso); if (Number.isNaN(ms)) return iso; return new Date(S.displayMs(ms)).toLocaleString('en-US', { timeZone: 'America/New_York', dateStyle: 'medium', timeStyle: 'short' }); } catch { return iso; } };
 
 const CSS = `body{font:15px/1.5 system-ui,Segoe UI,Arial,sans-serif;color:#1b1f3a;margin:0;background:#f5f6fb}
 main{max-width:980px;margin:0 auto;padding:24px 16px 60px}h1{color:#041e42;margin:.2em 0}h2{color:#041e42;border-bottom:2px solid #a89968;padding-bottom:4px;margin-top:28px}

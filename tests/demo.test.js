@@ -78,3 +78,18 @@ test('demo shows event-day times and the demo clock moves everything together', 
   assert.equal(me.event.judging_open, false);
   assert.equal((await req('POST', '/api/admin/demo-clock', { stage: 'nope' })).status >= 400, true);
 });
+
+test('server-made text (Rehearsal, offline package) shows event-day times in the demo', async () => {
+  assert.equal((await req('POST', '/api/auth/login', { email: 'admin@demo.uakron.edu', password: 'demo-pass-2026' })).status, 200);
+  for (const stage of ['sprint', 'judging']) {
+    assert.equal((await req('POST', '/api/admin/demo-clock', { stage })).status, 200);
+    const times = (await req('GET', '/api/admin/rehearsal')).data.auto.find((a) => a.id === 'times');
+    assert.equal(times.detail, 'Freeze Friday, Nov 6 4:30 PM', stage);
+  }
+  assert.equal((await req('POST', '/api/admin/demo-clock', { stage: 'sprint' })).status, 200);
+  assert.equal((await req('POST', '/api/admin/offline-package')).status, 200);
+  const html = await (await fetch(BASE + '/api/admin/offline/index.html', { headers: { Cookie: cookie } })).text();
+  assert.match(html, /Built Nov 6, 2026, 1:3\d\sPM/);
+  const off = (await req('GET', '/api/admin/rehearsal')).data.auto.find((a) => a.id === 'offline');
+  assert.match(off.detail, /^Built 11\/6\/2026, 1:3\d:\d\d\sPM$/);
+});
