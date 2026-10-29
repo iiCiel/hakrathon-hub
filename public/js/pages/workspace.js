@@ -19,7 +19,10 @@ export async function render(rt) {
   // ---- file state ----
   const files = new Map(); // path -> { model, version, saved, saving, timer, conflict }
   const mk = (path, content, version) => {
-    const model = monaco.editor.createModel(content, monacoLang(path), monaco.Uri.parse(`file:///t${teamId}/${encodeURI(path)}`));
+    const uri = monaco.Uri.parse(`file:///t${teamId}/${encodeURI(path)}`);
+    const stale = monaco.editor.getModel(uri); // left over from a rename/delete race: start clean
+    if (stale) stale.dispose();
+    const model = monaco.editor.createModel(content, monacoLang(path), uri);
     const f = { path, model, version, saved: content, saving: false, timer: null, conflict: null };
     model.onDidChangeContent(() => { if (!f.applyingRemote) { drawFiles(); scheduleSave(f); } });
     files.set(path, f);
@@ -211,12 +214,14 @@ export async function render(rt) {
     const seen = new Set();
     for (const sf of d.files) {
       seen.add(sf.path);
-      const f = files.get(sf.path);
-      if (!f) mk(sf.path, sf.content, sf.version);
-      else if (sf.version > f.version && !f.saving) {
-        if (dirty(f)) f.conflict = { content: sf.content, version: sf.version, by: 'A teammate' };
-        else applyRemote(f, sf.content, sf.version);
-      }
+      try { // one bad file must not stop the rest of the catch-up
+        const f = files.get(sf.path);
+        if (!f) mk(sf.path, sf.content, sf.version);
+        else if (sf.version > f.version && !f.saving) {
+          if (dirty(f)) f.conflict = { content: sf.content, version: sf.version, by: 'A teammate' };
+          else applyRemote(f, sf.content, sf.version);
+        }
+      } catch (e) { console.error('resync', sf.path, e); }
     }
     for (const [p, f] of [...files]) {
       if (seen.has(p) || f.saving) continue;
@@ -265,13 +270,16 @@ export async function render(rt) {
     const f = files.get(current);
     await save(f);
     try {
-      await api.post(`/api/workspace/${teamId}/rename`, { from: current, to: to.trim() });
+      const from = current, dest = to.trim();
+      await api.post(`/api/workspace/${teamId}/rename`, { from, to: dest });
+      // Our own "renamed" event can arrive before this reply and has already moved the file.
+      if (files.has(dest) || !files.has(from) || files.get(from) !== f) { if (files.has(dest)) open(dest); return; }
       clearTimeout(f.timer);
-      files.delete(current);
-      const nf = mk(to.trim(), f.model.getValue(), f.version + 1);
+      files.delete(from);
+      const nf = mk(dest, f.model.getValue(), f.version + 1);
       nf.saved = f.saved;
       f.model.dispose();
-      open(to.trim());
+      open(dest);
       if (dirty(nf)) scheduleSave(nf);
     } catch (e) { toast(e.message, 'bad'); }
   }

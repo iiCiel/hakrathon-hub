@@ -218,14 +218,14 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: .9rem; }
 @media (max-width: 860px) { .auth-wrap { grid-template-columns: 1fr; } .auth-art { padding: 30px 22px; } .auth-art .logo { font-size: 40px; } .auth-art h1 { font-size: 1.8rem; } .auth-art ul { display: none; } }
 
 /* ---------- chat ---------- */
-.chat { display: grid; grid-template-columns: 260px 1fr; height: calc(100vh - 58px - var(--banner-h, 0px)); }
+.chat { display: grid; grid-template-columns: 260px 1fr; grid-template-rows: minmax(0, 1fr); height: calc(100vh - 58px - var(--banner-h, 0px)); }
 .chat-side { border-right: 1px solid var(--line); background: var(--panel); overflow-y: auto; padding: 14px 10px; }
 .chat-side h4 { font-size: .74rem; text-transform: uppercase; letter-spacing: .08em; color: var(--ink-3); margin: 10px 8px 6px; }
 .chan { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 10px; border-radius: 8px; border: 0; background: none; color: var(--ink-2); font: 600 .92rem var(--sans); cursor: pointer; text-align: left; }
 .chan:hover { background: var(--panel-2); }
 .chan.on { background: rgba(45,91,255,.12); color: var(--blue-ink); }
 .chan .unread { margin-left: auto; background: var(--gold); color: var(--navy); border-radius: 99px; font-size: .72rem; padding: 0 7px; font-weight: 800; }
-.chat-main { display: flex; flex-direction: column; min-width: 0; background: var(--bg); }
+.chat-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg); }
 .chat-head { padding: 12px 18px; border-bottom: 1px solid var(--line); background: var(--panel); }
 .chat-head .d { font-size: .85rem; color: var(--ink-3); }
 .pins { background: var(--gold-soft); padding: 8px 18px; font-size: .88rem; border-bottom: 1px solid var(--line); max-height: 120px; overflow-y: auto; }
@@ -245,7 +245,7 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: .9rem; }
 .compose { padding: 12px 18px 16px; background: var(--panel); border-top: 1px solid var(--line); }
 .compose textarea { min-height: 46px; max-height: 220px; font-family: var(--sans); }
 .compose .hint { font-size: .78rem; color: var(--ink-3); margin-top: 4px; }
-@media (max-width: 760px) { .chat { grid-template-columns: 1fr; } .chat-side { display: flex; align-items: center; gap: 4px; overflow-x: auto; padding: 8px; border-right: 0; border-bottom: 1px solid var(--line); } .chat-side h4 { display: none; } .chan { width: auto; white-space: nowrap; } }
+@media (max-width: 760px) { .chat { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); } .chat-side { display: flex; align-items: center; gap: 4px; overflow-x: auto; padding: 8px; border-right: 0; border-bottom: 1px solid var(--line); } .chat-side h4 { display: none; } .chan { width: auto; white-space: nowrap; } }
 
 /* ---------- workspace ---------- */
 .ws { display: grid; grid-template-columns: 240px minmax(0, 1fr) 380px; height: calc(100vh - 58px - var(--banner-h, 0px)); }

@@ -44,21 +44,27 @@ export async function render(route) {
   const loadOlder = async () => {
     if (loadingOlder || !hasMore || !messages.length) return;
     loadingOlder = true;
-    const h0 = list.scrollHeight, top0 = list.scrollTop;
+    const anchor = list.querySelector('.msg[data-id]'); // keep this message where it is on screen
+    const anchorId = anchor && anchor.dataset.id, y0 = anchor ? anchor.getBoundingClientRect().top : 0;
     const d = await api.get(`/api/chat/${encodeURIComponent(current)}?before=${messages[0].id}`).catch((e) => { toast(e.message, 'bad'); return null; });
     loadingOlder = false;
     if (!d) return;
     hasMore = d.messages.length >= 100;
     messages = d.messages.filter((m) => !messages.some((x) => x.id === m.id)).concat(messages);
     drawMsgs(false);
-    list.scrollTop = list.scrollHeight - h0 + top0; // keep the reader where they were
+    const again = anchorId && list.querySelector(`.msg[data-id="${anchorId}"]`);
+    if (again) list.scrollTop += again.getBoundingClientRect().top - y0;
   };
   list.addEventListener('scroll', () => { if (list.scrollTop < 40) loadOlder(); });
   const drawMsgs = (stick = true) => {
     const atBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 80;
     clear(list, hasMore ? h('button', { class: 'btn ghost sm', style: { display: 'block', margin: '6px auto' }, onclick: loadOlder }, 'Load older messages') : null,
       messages.length ? messages.map((m, i) => msgNode(m, messages[i - 1])) : h('div', { class: 'empty' }, h('div', { class: 'big' }, '💬'), `No messages in ${chan.name} yet.`));
-    if (stick || atBottom) list.scrollTop = list.scrollHeight;
+    if (stick || atBottom) {
+      list.scrollTop = list.scrollHeight;
+      // On first draw the list isn't on the page yet; scroll again once it is.
+      requestAnimationFrame(() => { list.scrollTop = list.scrollHeight; });
+    }
     pins.hidden = !pinned.length;
     clear(pins, pinned.map((p) => h('div', null, '📌 ', h('b', null, p.user.name, ': '), p.body.length > 200 ? p.body.slice(0, 200) + '…' : p.body)));
     if (messages.length) { const last = messages[messages.length - 1].id; noteLatest(current, last); markSeen(current, last); renderChrome(); }

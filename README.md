@@ -11,7 +11,7 @@ Team portal for HAkrathon 2026 (UA College of Business, Nov 6). Built around the
 | Judge | After freeze: browse each team's repo/zip, run it in the sandbox, watch the video (auto-stops at 5:00), score 1–10 on the rubric with notes, declare conflicts, finalist Q&A adjustments (Technical + Presentation only) |
 | Admin | Rehearsal checklist, access codes, people, teams/tables, event times and schedule, announcements (pop up on every screen), staff validation checklist, per-team or global freeze extensions, tabulation with tie-breakers and flags, awards (one prize per team), publish results, CSV exports, offline judging package, audit log |
 
-Everything updates live (chat, files, help queue, submissions). Code and submissions lock automatically at the build freeze, and the official repo snapshot is taken then: the last commit made before the freeze, with its exact SHA.
+Everything updates live (chat, files, help queue, submissions). Code and submissions lock automatically at the build freeze (editor saves already on their way get 5 seconds' grace), and the official repo snapshot is taken then: the portal records which commit GitHub had at the freeze and takes the last commit before the freeze from that history, so pushes made later with back-dated times don't count. File names Windows can't store (`CON.txt`, `a:b.txt`, `README.md` next to `readme.md`) are skipped and listed for the team instead of failing the snapshot.
 
 ## Run it (Windows)
 
@@ -44,7 +44,7 @@ Everything updates live (chat, files, help queue, submissions). Code and submiss
 
 ## Settings
 
-Optional `.env` (copy `.env.example`): port, runner mode, GitHub sign-in (OAuth app; callback `<PUBLIC_URL>/api/auth/github/callback`), and a `GITHUB_TOKEN` for snapshotting private repos. The token is only used when an admin presses **Re-snapshot repo** on a team's review page; teams' own snapshots and the automatic freeze snapshot need public repos. Event times, team size, max teams, email domains (`uakron.edu, zips.uakron.edu` by default) and the schedule are edited in Admin → Event & schedule.
+Optional `.env` (copy `.env.example`): port, runner mode, GitHub sign-in (OAuth app; callback `<PUBLIC_URL>/api/auth/github/callback`), and a `GITHUB_TOKEN` for snapshotting private repos. The token is only used when an admin presses **Re-snapshot repo** on a team's review page and ticks *Use the server's GitHub token*; teams' own snapshots and the automatic freeze snapshot need public repos. Event times, team size, max teams, email domains (`uakron.edu, zips.uakron.edu` by default) and the schedule are edited in Admin → Event & schedule.
 
 ## Data and backups
 
