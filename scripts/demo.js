@@ -17,7 +17,8 @@ const A = require('../server/auth');
 const S = require('../server/settings');
 const democlock = require('../server/democlock');
 
-const PW = 'demo-pass-2026';
+// A hosted copy (render.yaml) sets its own password, so only people given it can sign in.
+const PW = process.env.DEMO_PASSWORD || 'demo-pass-2026';
 const PORT = Number(process.env.DEMO_PORT) || 3100;
 const HOST = process.env.DEMO_HOST || '127.0.0.1';
 

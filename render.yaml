@@ -1,0 +1,23 @@
+# Hosted copy of the DEMO only (sample teams, red DEMO banner), for showing the portal to people
+# who aren't at this laptop. Never the real event: that runs on the laptop with start.bat.
+# Free plan: it sleeps after 15 idle minutes and starts fresh (new sample data) when it wakes.
+# Code running is off here (no Docker on the host).
+services:
+  - type: web
+    name: hakrathon-demo
+    runtime: node
+    plan: free
+    buildCommand: npm ci --omit=dev
+    startCommand: DEMO_PORT=$PORT node scripts/demo.js
+    healthCheckPath: /
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: DEMO_HOST
+        value: 0.0.0.0
+      - key: DEMO_DATA_DIR
+        value: /tmp/hak-demo
+      - key: RUNNER
+        value: "off"
+      - key: DEMO_PASSWORD
+        sync: false
