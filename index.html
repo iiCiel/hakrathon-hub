@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HAkrathon Hub</title>
+<meta name="description" content="The team portal for HAkrathon 2026 at the University of Akron College of Business: team chat, a shared code editor that runs code, GitHub repo submission, a mentor help queue and rubric judging.">
+<meta property="og:title" content="HAkrathon Hub">
+<meta property="og:description" content="Team portal for HAkrathon 2026: chat, code, submit, mentor help and judging in one place.">
+<meta property="og:image" content="img/student-home.webp">
+<link rel="icon" href="img/icon.svg" type="image/svg+xml">
+<style>
+:root {
+  --navy: #10166b; --navy-2: #1a2391; --blue: #2d5bff; --gold: #c9961e; --gold-ink: #7a5700; --gold-soft: #f6e9c6;
+  --bg: #f4f5fa; --panel: #ffffff; --ink: #141833; --ink-2: #4a5072; --ink-3: #5f6584; --line: #e1e4f0;
+  --shadow: 0 1px 2px rgba(16,22,107,.06), 0 8px 28px rgba(16,22,107,.08);
+  --sans: "Segoe UI", system-ui, -apple-system, Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: "Cascadia Code", Consolas, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #0b0e24; --panel: #131735; --ink: #eceefb; --ink-2: #b4b9d9; --ink-3: #9aa0c4; --line: #262c57;
+    --gold-ink: #e6b84a; --gold-soft: #3a2f10; --blue: #6b8cff; --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 28px rgba(0,0,0,.3); }
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 17px/1.6 var(--sans); -webkit-font-smoothing: antialiased; }
+a { color: var(--blue); }
+img { max-width: 100%; height: auto; display: block; }
+.wrap { max-width: 1160px; margin: 0 auto; padding: 0 24px; }
+
+/* top */
+.top { background: linear-gradient(135deg, var(--navy) 0%, var(--navy-2) 100%); color: #fff; position: relative; overflow: hidden; }
+.top::after { content: "</>"; position: absolute; right: -20px; bottom: -70px; font: 700 300px/1 var(--mono); color: rgba(255,255,255,.04); pointer-events: none; }
+.nav { display: flex; align-items: center; justify-content: space-between; padding: 20px 0; gap: 16px; }
+.brand { display: flex; align-items: center; gap: 12px; color: #fff; text-decoration: none; font-weight: 700; font-size: 19px; }
+.brand img { width: 36px; height: 36px; border-radius: 9px; }
+.nav a.gh { color: #fff; text-decoration: none; font-size: 15px; font-weight: 600; border: 1px solid rgba(255,255,255,.3); padding: 8px 14px; border-radius: 8px; white-space: nowrap; }
+.nav a.gh:hover { background: rgba(255,255,255,.1); }
+.hero { display: grid; grid-template-columns: 1.05fr 1fr; gap: 48px; align-items: center; padding: 40px 0 72px; position: relative; z-index: 1; }
+.eyebrow { color: var(--gold); font-weight: 700; letter-spacing: .14em; text-transform: uppercase; font-size: 13px; margin: 0 0 14px; }
+h1 { font-size: clamp(36px, 5.2vw, 58px); line-height: 1.05; margin: 0 0 20px; letter-spacing: -.02em; }
+.lede { font-size: 19px; color: #d5d9f5; margin: 0 0 28px; max-width: 34em; }
+.cta { display: flex; gap: 12px; flex-wrap: wrap; }
+.btn { display: inline-block; padding: 12px 20px; border-radius: 9px; font-weight: 600; text-decoration: none; font-size: 16px; }
+.btn.primary { background: var(--gold); color: #1b1300; }
+.btn.primary:hover { background: #dba82a; }
+.btn.ghost { color: #fff; border: 1px solid rgba(255,255,255,.35); }
+.btn.ghost:hover { background: rgba(255,255,255,.1); }
+.hero-shot { border-radius: 12px; box-shadow: 0 30px 60px rgba(0,0,0,.35); border: 1px solid rgba(255,255,255,.15); cursor: zoom-in; }
+
+/* facts */
+.facts { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-top: -36px; position: relative; z-index: 2; }
+.fact { background: var(--panel); border-radius: 12px; padding: 20px 22px; box-shadow: var(--shadow); border: 1px solid var(--line); }
+.fact b { display: block; font: 700 28px/1.1 var(--mono); color: var(--ink); margin-bottom: 6px; }
+.fact span { color: var(--ink-2); font-size: 15px; line-height: 1.4; display: block; }
+
+/* sections */
+section.block { padding: 88px 0 0; }
+.block-head { max-width: 680px; margin-bottom: 32px; }
+.time { display: inline-block; font: 600 13px/1 var(--mono); color: var(--gold-ink); background: var(--gold-soft); padding: 6px 10px; border-radius: 6px; margin-bottom: 14px; }
+h2 { font-size: clamp(28px, 3.4vw, 38px); line-height: 1.15; margin: 0 0 12px; letter-spacing: -.01em; }
+.block-head p { color: var(--ink-2); margin: 0; }
+.pair { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+.solo { display: grid; grid-template-columns: 1fr; }
+.with-phone { display: grid; grid-template-columns: 1fr 260px; gap: 24px; align-items: start; }
+figure { margin: 0; }
+figure img { border-radius: 10px; border: 1px solid var(--line); box-shadow: var(--shadow); cursor: zoom-in; background: var(--panel); }
+figcaption { color: var(--ink-3); font-size: 14.5px; margin-top: 10px; line-height: 1.45; }
+figcaption b { color: var(--ink); font-weight: 600; }
+
+/* roles */
+.roles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+.role { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 22px; }
+.role h3 { margin: 0 0 8px; font-size: 18px; }
+.role p { margin: 0; color: var(--ink-2); font-size: 15px; line-height: 1.5; }
+.role .tag { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 8px; vertical-align: 1px; }
+
+/* built */
+.built { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; }
+.built ul { margin: 0; padding: 0; list-style: none; }
+.built li { padding: 14px 0; border-top: 1px solid var(--line); color: var(--ink-2); font-size: 16px; }
+.built li b { color: var(--ink); display: block; margin-bottom: 2px; }
+.stack { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
+.stack span { font: 500 13.5px/1 var(--mono); padding: 8px 10px; border-radius: 6px; background: var(--panel); border: 1px solid var(--line); color: var(--ink-2); }
+
+footer { margin-top: 96px; padding: 36px 0 48px; border-top: 1px solid var(--line); color: var(--ink-3); font-size: 14.5px; }
+footer .wrap { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+
+/* lightbox */
+.lb { position: fixed; inset: 0; background: rgba(6,8,30,.88); display: none; align-items: center; justify-content: center; padding: 24px; z-index: 50; cursor: zoom-out; }
+.lb.on { display: flex; }
+.lb img { max-height: 100%; max-width: 100%; border-radius: 8px; box-shadow: 0 20px 60px rgba(0,0,0,.5); }
+
+@media (max-width: 900px) {
+  .hero { grid-template-columns: 1fr; gap: 32px; padding-bottom: 64px; }
+  .facts, .roles { grid-template-columns: 1fr 1fr; }
+  .pair, .built { grid-template-columns: 1fr; }
+  .with-phone { grid-template-columns: 1fr; }
+  .with-phone figure.phone { max-width: 300px; }
+}
+@media (max-width: 560px) {
+  body { font-size: 16px; }
+  .wrap { padding: 0 16px; }
+  .facts, .roles { grid-template-columns: 1fr; }
+  .fact b { font-size: 24px; }
+  .nav a.gh { padding: 7px 10px; font-size: 14px; }
+  section.block { padding-top: 64px; }
+  .lede { font-size: 17px; }
+}
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <nav class="nav">
+      <a class="brand" href="#"><img src="img/icon.svg" alt="">HAkrathon Hub</a>
+      <a class="gh" href="https://github.com/iiCiel/hakrathon-hub">View on GitHub</a>
+    </nav>
+    <div class="hero">
+      <div>
+        <p class="eyebrow">HAkrathon 2026 · UA College of Business · Fri, Nov 6</p>
+        <h1>One portal for the whole hackathon day.</h1>
+        <p class="lede">Teams chat, write and run code together, link their GitHub repo and turn in their package. Mentors work a help queue. Judges score every project on the 100-point rubric. Everything updates live, and it locks itself at the 4:30 build freeze.</p>
+        <div class="cta">
+          <a class="btn primary" href="#day">See it in action</a>
+          <a class="btn ghost" href="https://github.com/iiCiel/hakrathon-hub">Source code</a>
+        </div>
+      </div>
+      <img class="hero-shot" src="img/student-home.webp" alt="Student home screen: event countdown, current phase Build Sprint 2, and the team's progress checklist" width="1600" height="1000">
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+  <div class="facts">
+    <div class="fact"><b>4 roles</b><span>Students, mentors, judges and event staff, each with their own screens</span></div>
+    <div class="fact"><b>10 s</b><span>Code runs in a locked-down sandbox: no internet, read-only, memory capped</span></div>
+    <div class="fact"><b>161 / 161</b><span>Checks pass in a full simulated event day, start to awards</span></div>
+    <div class="fact"><b>50 users</b><span>Load-tested for 10 minutes: 0 errors, 0 dropped connections</span></div>
+  </div>
+
+  <section class="block" id="day">
+    <div class="block-head">
+      <span class="time">7:30 AM – 4:30 PM</span>
+      <h2>Build together</h2>
+      <p>Every team gets a home screen with the live schedule and a checklist of what judges need, a shared code editor, and a private team chat.</p>
+    </div>
+    <div class="pair">
+      <figure>
+        <img src="img/workspace.webp" alt="Shared code editor with a Python file and the output of a run" loading="lazy" width="1600" height="1000">
+        <figcaption><b>Shared editor.</b> Files autosave for the whole team. Run Python, JavaScript, C, C++, Java or Bash right in the browser.</figcaption>
+      </figure>
+      <figure>
+        <img src="img/chat.webp" alt="Team chat with three messages" loading="lazy" width="1600" height="1000">
+        <figcaption><b>Chat.</b> Announcements, general and tech-help channels, plus a private channel per team. Code blocks are highlighted.</figcaption>
+      </figure>
+    </div>
+    <div class="pair" style="margin-top:24px">
+      <figure>
+        <img src="img/team.webp" alt="Team page with roster, roles and solution lane" loading="lazy" width="1600" height="1000">
+        <figcaption><b>Teams.</b> Create or join with a code, assign roles, pick a solution lane, turn in Checkpoints 1 and 2.</figcaption>
+      </figure>
+      <figure>
+        <img src="img/mentor-help.webp" alt="Mentor help queue with one waiting request" loading="lazy" width="1600" height="1000">
+        <figcaption><b>Mentor help queue.</b> Teams ask for help; a mentor claims it, walks to the table, and closes it with a short note.</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section class="block">
+    <div class="block-head">
+      <span class="time">4:20 PM</span>
+      <h2>Submit before the freeze</h2>
+      <p>The package page shows exactly what is missing. Teams link a GitHub repo, upload a zip, or add a live link, plus a 5-minute demo video, a one-page brief and disclosures. At 4:30 everything locks, and the portal takes the official copy of each repo as it stood at the freeze.</p>
+    </div>
+    <div class="with-phone">
+      <figure>
+        <img src="img/submit.webp" alt="Submission package page with GitHub repository field and a checklist with the freeze countdown" loading="lazy" width="1600" height="1000">
+        <figcaption><b>Submission package.</b> Checklist and countdown on the right; teammates see each change live.</figcaption>
+      </figure>
+      <figure class="phone">
+        <img src="img/phone-freeze.webp" alt="Phone view of the student home ten minutes before the freeze, with a yellow warning banner" loading="lazy" width="780" height="1688">
+        <figcaption><b>On a phone.</b> Ten minutes out, every screen shows the freeze warning.</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section class="block">
+    <div class="block-head">
+      <span class="time">5:00 PM</span>
+      <h2>Judge on the rubric</h2>
+      <p>Judges see every team's package, browse and run the code, watch the video, and score each criterion 1 to 10. Conflicts of interest are declared, not hidden.</p>
+    </div>
+    <div class="pair">
+      <figure>
+        <img src="img/judge-score.webp" alt="Judge scorecard next to the team's submission checklist" loading="lazy" width="1600" height="1000">
+        <figcaption><b>Scorecard.</b> Innovation, Impact and Technical at 25% each, Usability 15%, Presentation 10%.</figcaption>
+      </figure>
+      <figure>
+        <img src="img/judge-list.webp" alt="Judging list of teams with package status and the rubric" loading="lazy" width="1600" height="1000">
+        <figcaption><b>Team list.</b> Package status at a glance, with the rubric beside it.</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section class="block">
+    <div class="block-head">
+      <span class="time">6:55 PM</span>
+      <h2>Tabulate and award</h2>
+      <p>Staff see averages per criterion, missing scorecards and tie-break rules in one table, mark finalists, and publish results to every screen at once.</p>
+    </div>
+    <div class="solo">
+      <figure>
+        <img src="img/admin-scoring.webp" alt="Admin scoring page with judging phases and the tabulation table" loading="lazy" width="1600" height="1000">
+        <figcaption><b>Scoring and awards.</b> Ties within 0.25 points break on Impact, then Technical, then Innovation, then a judge vote. Exports to CSV.</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section class="block">
+    <div class="block-head">
+      <h2>Who uses it</h2>
+    </div>
+    <div class="roles">
+      <div class="role"><h3><span class="tag" style="background:var(--blue)"></span>Students</h3><p>Team, code editor, chat, mentor requests, checkpoints and the final package.</p></div>
+      <div class="role"><h3><span class="tag" style="background:var(--gold)"></span>Mentors</h3><p>Help queue and a read-only view of any team's code.</p></div>
+      <div class="role"><h3><span class="tag" style="background:#18733f"></span>Judges</h3><p>Packages, repos, videos and the scorecard; finalist Q&amp;A adjustments.</p></div>
+      <div class="role"><h3><span class="tag" style="background:var(--navy)"></span>Event staff</h3><p>Access codes, schedule, announcements, freeze extensions, tabulation, results, backups and an audit log.</p></div>
+    </div>
+  </section>
+
+  <section class="block">
+    <div class="built">
+      <div>
+        <div class="block-head" style="margin-bottom:0">
+          <h2>How it's built</h2>
+          <p>It runs on one laptop at the event. Students connect over the venue Wi-Fi, or through a secure tunnel if the network blocks it. Nothing depends on an outside service on the day.</p>
+        </div>
+        <div class="stack">
+          <span>Node.js</span><span>Express</span><span>Socket.IO</span><span>SQLite</span><span>Docker sandbox</span><span>Monaco editor</span><span>Plain JavaScript</span>
+        </div>
+      </div>
+      <ul>
+        <li><b>Sandboxed code runs</b>Every run gets a throwaway container: no network, read-only system, 384 MB memory, process limit, 10-second cap.</li>
+        <li><b>Fair freeze</b>Records which commit GitHub had at 4:30, so pushes made later with back-dated times don't count.</li>
+        <li><b>Invite-only sign-up</b>Personal access codes tied to each student's university email; single-use codes for judges and mentors.</li>
+        <li><b>Built for a bad-Wi-Fi day</b>Live updates catch up after a dropped connection, and an offline judging package is one click away.</li>
+      </ul>
+    </div>
+  </section>
+</div>
+
+<footer>
+  <div class="wrap">
+    <span>Built by Soliman Alktaifan for HAkrathon 2026, University of Akron College of Business.</span>
+    <span>Screenshots are from the portal's demo mode; all teams and people in them are sample data.</span>
+  </div>
+</footer>
+
+<div class="lb" id="lb" role="dialog" aria-label="Enlarged screenshot"><img alt=""></div>
+<script>
+(function () {
+  var lb = document.getElementById('lb'), big = lb.querySelector('img');
+  document.querySelectorAll('figure img, .hero-shot').forEach(function (img) {
+    img.addEventListener('click', function () { big.src = img.src; big.alt = img.alt; lb.classList.add('on'); });
+  });
+  lb.addEventListener('click', function () { lb.classList.remove('on'); });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') lb.classList.remove('on'); });
+})();
+</script>
+</body>
+</html>
