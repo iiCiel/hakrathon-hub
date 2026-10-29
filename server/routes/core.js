@@ -48,7 +48,7 @@ function emailAllowed(email, role) {
 }
 
 // ---------- auth ----------
-r.post('/auth/register', wrap((req, res) => {
+r.post('/auth/register', wrap(async (req, res) => {
   if (!A.rateLimit(`reg:${req.ip}`, 300, 15 * 60000)) throw new HttpError(429, 'Too many attempts. Wait a few minutes.');
   const b = req.body || {};
   const inviteCode = str(b.invite, { max: 40, required: true, name: 'Access code' }).toUpperCase().replace(/\s+/g, '');
@@ -58,6 +58,7 @@ r.post('/auth/register', wrap((req, res) => {
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new HttpError(400, 'Enter a valid email address.');
   if (password.length < 8 || password.length > 200) throw new HttpError(400, 'Password must be at least 8 characters.');
   if (!b.agree) throw new HttpError(400, 'You must agree to the event rules and code of conduct.');
+  const passwordHash = await A.hashPasswordAsync(password); // before the transaction: it takes ~45 ms
 
   const user = tx(() => {
     const inv = get('SELECT * FROM invites WHERE code = ?', inviteCode);
@@ -69,7 +70,7 @@ r.post('/auth/register', wrap((req, res) => {
     if (get('SELECT id FROM users WHERE email = ?', email)) throw new HttpError(409, 'An account with that email already exists. Sign in instead.');
     run('UPDATE invites SET uses = uses + 1 WHERE code = ?', inviteCode);
     const info = run(`INSERT INTO users (email, name, password_hash, role, major, class_level, skills, preferred_role, agreed_rules)
-      VALUES (?,?,?,?,?,?,?,?,1)`, email, name, A.hashPassword(password), inv.role,
+      VALUES (?,?,?,?,?,?,?,?,1)`, email, name, passwordHash, inv.role,
       str(b.major, { max: 80 }), str(b.class_level, { max: 40 }), str(b.skills, { max: 500 }), str(b.preferred_role, { max: 80 }));
     return get('SELECT * FROM users WHERE id = ?', Number(info.lastInsertRowid));
   });
@@ -79,7 +80,7 @@ r.post('/auth/register', wrap((req, res) => {
   return { user: A.publicUser(user) };
 }));
 
-r.post('/auth/login', wrap((req, res) => {
+r.post('/auth/login', wrap(async (req, res) => {
   const email = str((req.body || {}).email, { max: 200, required: true, name: 'Email' }).toLowerCase();
   const password = String((req.body || {}).password || '');
   // Per IP+email (so one person can't lock a classmate out), per email (slows guessing), per IP (coarse).
@@ -87,7 +88,7 @@ r.post('/auth/login', wrap((req, res) => {
     throw new HttpError(429, 'Too many sign-in attempts. Wait a few minutes or ask staff to reset your password.');
   }
   const u = get('SELECT * FROM users WHERE email = ?', email);
-  const ok = A.verifyPassword(password, u ? u.password_hash : A.DUMMY_HASH);
+  const ok = await A.verifyPasswordAsync(password, u ? u.password_hash : A.DUMMY_HASH);
   if (!u || !ok) throw new HttpError(401, 'Email or password is incorrect.');
   if (u.disabled) throw new HttpError(403, 'This account is disabled. Ask event staff.');
   A.setSessionCookie(req, res, A.createSession(u.id));
@@ -126,12 +127,12 @@ r.patch('/me', wrap((req) => {
   return { user: A.publicUser(get('SELECT * FROM users WHERE id = ?', u.id)) };
 }));
 
-r.post('/me/password', wrap((req, res) => {
+r.post('/me/password', wrap(async (req, res) => {
   const u = A.requireUser(req);
   const { current, next } = req.body || {};
-  if (u.password_hash && !A.verifyPassword(String(current || ''), u.password_hash)) throw new HttpError(400, 'Current password is incorrect.');
+  if (u.password_hash && !(await A.verifyPasswordAsync(String(current || ''), u.password_hash))) throw new HttpError(400, 'Current password is incorrect.');
   if (!next || String(next).length < 8) throw new HttpError(400, 'New password must be at least 8 characters.');
-  run('UPDATE users SET password_hash = ? WHERE id = ?', A.hashPassword(String(next)), u.id);
+  run('UPDATE users SET password_hash = ? WHERE id = ?', await A.hashPasswordAsync(String(next)), u.id);
   A.destroyUserSessions(u.id);
   if (bus.disconnectUser) bus.disconnectUser(u.id);
   A.setSessionCookie(req, res, A.createSession(u.id));

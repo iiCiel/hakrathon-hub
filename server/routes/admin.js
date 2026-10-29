@@ -98,6 +98,11 @@ r.patch('/admin/users/:id', wrap((req) => {
   let teamId = 'team_id' in b ? (b.team_id ? teamExists(b.team_id) : null) : u.team_id;
   if (role !== 'participant') teamId = null;
   const oldTeam = u.team_id;
+  if (teamId && teamId !== oldTeam && !b.force) {
+    const st = S.getSettings();
+    const n = get("SELECT COUNT(*) AS c FROM users WHERE team_id = ? AND disabled = 0 AND role = 'participant'", teamId).c;
+    if (n >= st.team_max) throw new HttpError(409, `That team already has ${n} members (the maximum is ${st.team_max}).`);
+  }
   run('UPDATE users SET role = ?, team_id = ?, disabled = ?, checked_in = ?, name = ? WHERE id = ?', role, teamId,
     'disabled' in b ? (b.disabled ? 1 : 0) : u.disabled, 'checked_in' in b ? (b.checked_in ? 1 : 0) : u.checked_in,
     'name' in b ? str(b.name, { max: 80, required: true, name: 'Name' }) : u.name, u.id);

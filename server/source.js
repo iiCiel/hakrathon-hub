@@ -83,8 +83,11 @@ async function snapshotRepo(teamId, url, { useToken = false, before = 0 } = {}) 
   // Token goes in through GIT_CONFIG_* env vars: never in argv, the URL, or .git/config.
   const authEnv = token ? { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'http.https://github.com/.extraheader',
     GIT_CONFIG_VALUE_0: `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${token}`).toString('base64')}` } : {};
+  // longpaths: deep folders (committed node_modules, Java packages) otherwise fail to check out on
+  // Windows ("Filename too long"). autocrlf=false: keep files exactly as committed (Git for Windows
+  // defaults to turning LF into CRLF, which breaks shell scripts in the Linux sandbox).
   const safe = ['-c', 'core.symlinks=false', '-c', 'core.hooksPath=/dev/null', '-c', 'credential.helper=',
-    '-c', 'protocol.file.allow=never', '-c', 'protocol.ext.allow=never'];
+    '-c', 'protocol.file.allow=never', '-c', 'protocol.ext.allow=never', '-c', 'core.longpaths=true', '-c', 'core.autocrlf=false'];
   // A freeze snapshot needs history to find the pre-freeze commit: blobless clone, checkout after.
   const how = before ? ['--filter=blob:none', '--no-checkout'] : ['--depth', '1'];
   const r = await git([...safe, 'clone', ...how, '--single-branch', '--no-tags', '--', cloneUrl, tmp], { env: authEnv, timeout: before ? 150000 : 90000 });
@@ -141,19 +144,24 @@ async function extractZip(teamId, zipPath) {
   const tmp = path.join(root, `zip-tmp-${crypto.randomBytes(4).toString('hex')}`);
   await fsp.mkdir(tmp);
   let written = 0;
+  const skipped = []; // what we left out and why, so the team (and judges) know
+  const seen = new Set(); // Windows can't hold README.md and readme.md side by side
   try {
     for (let i = 0; i < entries.length; i++) {
       const e = entries[i];
       const mode = (e.attr >>> 16) & 0o170000;
-      if (mode === 0o120000) continue; // symlink
       let name = names[i];
-      if (/^([\\/]|[a-zA-Z]:)/.test(name)) continue; // absolute paths are never valid zip entries
+      if (mode === 0o120000) { skipped.push({ path: name, why: 'link (shortcut)' }); continue; }
+      if (/^([\\/]|[a-zA-Z]:)/.test(name)) { skipped.push({ path: name, why: 'absolute path' }); continue; } // never valid in a zip
       if (strip) name = name.slice(strip.length);
       if (name.startsWith('__MACOSX/') || name.endsWith('.DS_Store')) continue;
-      const rel = safeRel(name);
-      if (!rel) continue;
+      const rel = safeRel(name, 400);
+      if (!rel) { skipped.push({ path: name, why: badNameReason(name) }); continue; }
       const full = path.join(tmp, rel);
-      if (!full.startsWith(tmp + path.sep)) continue;
+      if (!full.startsWith(tmp + path.sep)) { skipped.push({ path: name, why: 'outside the project folder' }); continue; }
+      const key = rel.toLowerCase();
+      if (seen.has(key)) { skipped.push({ path: name, why: 'same name as another file except for upper/lower case' }); continue; }
+      seen.add(key);
       const data = e.getData();
       written += data.length;
       if (written > MAX_BYTES) throw Object.assign(new Error('Zip unpacks to more than 300 MB.'), { status: 400 });
@@ -165,7 +173,16 @@ async function extractZip(teamId, zipPath) {
     throw err.status ? err : Object.assign(new Error('Could not unpack that zip.'), { status: 400 });
   }
   await replaceDir(teamDir(teamId, 'zip'), tmp);
-  return { files: entries.length };
+  return { files: entries.length - skipped.length, skipped };
+}
+function badNameReason(name) {
+  const parts = String(name).replace(/\\/g, '/').split('/');
+  if (name.length > 400) return 'path too long';
+  if (parts.some((s) => s === '..')) return 'points outside the project folder';
+  if (parts.some((s) => /^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\.|$)/i.test(s))) return 'name reserved by Windows';
+  if (parts.some((s) => /[:*?"<>|\x00-\x1f]/.test(s))) return 'character not allowed in file names';
+  if (parts.some((s) => /[. ]$/.test(s))) return 'name ends with a dot or space';
+  return 'file name not allowed';
 }
 
 async function listTree(teamId, kind) {
@@ -193,7 +210,7 @@ async function listTree(teamId, kind) {
 
 async function readSourceFile(teamId, kind, relPath) {
   const root = teamDir(teamId, kind);
-  const rel = safeRel(relPath);
+  const rel = safeRel(relPath, 400);
   if (!rel) throw Object.assign(new Error('Bad path.'), { status: 400 });
   const full = path.resolve(root, rel);
   if (!full.startsWith(path.resolve(root) + path.sep)) throw Object.assign(new Error('Bad path.'), { status: 400 });

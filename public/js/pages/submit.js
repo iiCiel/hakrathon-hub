@@ -1,4 +1,4 @@
-import { h, clear, field, toast, busy, confirmBox, fmtDateTime, fmtTime, fmtDur, fmtAgo, badge, tick } from '../ui.js';
+import { h, clear, field, toast, busy, confirmBox, modal, fmtDateTime, fmtTime, fmtDur, fmtAgo, badge, tick } from '../ui.js';
 import { api, upload } from '../api.js';
 import { state, on, onLeave, role, now, go, freezeAt } from '../app.js';
 import { sourceBrowser, sourceRunner } from '../components.js';
@@ -88,6 +88,12 @@ export async function render() {
         try {
           const r = await upload(`/api/submission/${kind}`, file, extra, (p) => { bar.firstChild.style.width = `${Math.round(p * 100)}%`; });
           data.submission = r.submission; toast('Uploaded.', 'ok'); if (after) after(); draw();
+          if (r.skipped && r.skipped.length) {
+            modal(`${r.skipped.length} file${r.skipped.length === 1 ? ' was' : 's were'} left out`, h('div', null,
+              h('p', null, 'The rest of the zip was saved. These files can’t be stored on the event computer, so judges won’t see them. Rename them and upload again if they matter:'),
+              h('ul', { style: { maxHeight: '240px', overflow: 'auto' } }, r.skipped.slice(0, 50).map((x) => h('li', null, h('code', null, x.path), ` — ${x.why}`))),
+              r.skipped.length > 50 ? h('p', { class: 'faint' }, `…and ${r.skipped.length - 50} more.`) : null), [{ label: 'OK', value: true }]);
+          }
         } catch (e) { toast(e.message, 'bad'); bar.hidden = true; btn.disabled = false; }
         input.value = '';
       });

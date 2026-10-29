@@ -17,6 +17,22 @@ function verifyPassword(pw, stored) {
   const got = crypto.scryptSync(pw, Buffer.from(s, 'base64'), expected.length, { N: 16384, r: 8, p: 1 });
   return crypto.timingSafeEqual(expected, got);
 }
+// Async versions for request handlers: scrypt runs on the thread pool, so 50 people signing in
+// at 7:30 don't freeze the portal for everyone (the sync ones block ~45 ms each).
+const SCRYPT = { N: 16384, r: 8, p: 1 };
+const scryptAsync = (pw, salt, len) => new Promise((resolve, reject) => crypto.scrypt(pw, salt, len, SCRYPT, (e, k) => (e ? reject(e) : resolve(k))));
+async function hashPasswordAsync(pw) {
+  const salt = crypto.randomBytes(16);
+  const hash = await scryptAsync(pw, salt, 64);
+  return `scrypt$${salt.toString('base64')}$${hash.toString('base64')}`;
+}
+async function verifyPasswordAsync(pw, stored) {
+  if (!stored || !stored.startsWith('scrypt$')) return false;
+  const [, s, h] = stored.split('$');
+  const expected = Buffer.from(h, 'base64');
+  const got = await scryptAsync(pw, Buffer.from(s, 'base64'), expected.length);
+  return crypto.timingSafeEqual(expected, got);
+}
 // Used when the email doesn't exist, so login time doesn't reveal which emails are registered.
 const DUMMY_HASH = hashPassword(crypto.randomBytes(12).toString('hex'));
 
@@ -102,7 +118,7 @@ function publicUser(u) {
 }
 
 module.exports = {
-  COOKIE, hashPassword, verifyPassword, DUMMY_HASH, createSession, destroySession, destroyUserSessions,
+  COOKIE, hashPassword, verifyPassword, hashPasswordAsync, verifyPasswordAsync, DUMMY_HASH, createSession, destroySession, destroyUserSessions,
   parseCookies, userFromToken, setSessionCookie, clearSessionCookie, attachUser, rateLimit,
   HttpError, requireUser, requireRole, isStaff, publicUser, sha256,
 };

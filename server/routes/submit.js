@@ -208,15 +208,17 @@ function runUpload(mw) {
 r.post('/submission/zip', guardUpload, runUpload(upload(100)), wrap(async (req) => {
   const { u, t } = req.ctx;
   if (!req.file) throw new HttpError(400, 'Choose a .zip file.');
+  let skipped = [];
   try {
     if (path.extname(req.file.originalname).toLowerCase() !== '.zip') throw new HttpError(400, 'Upload a .zip file.');
     const res = await source.extractZip(t.id, req.file.path);
     const name = req.file.originalname.slice(0, 120);
     run('UPDATE submissions SET zip_name = ?, zip_at = ?, updated_at = ? WHERE team_id = ?', name, now(), now(), t.id);
-    log(t.id, u.id, 'zip.upload', `${name} (${res.files} files)`);
+    log(t.id, u.id, 'zip.upload', `${name} (${res.files} files${res.skipped.length ? `, ${res.skipped.length} skipped: ${res.skipped.slice(0, 5).map((x) => `${x.path} (${x.why})`).join('; ')}` : ''})`);
+    skipped = res.skipped;
   } finally { fsp.rm(req.file.path, { force: true }).catch(() => {}); }
   changed(t);
-  return { submission: shapeSub(t, subRow(t.id), u) };
+  return { submission: shapeSub(t, subRow(t.id), u), skipped };
 }));
 
 r.delete('/submission/zip', wrap((req) => {

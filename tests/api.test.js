@@ -225,6 +225,17 @@ test('submission package: zip, uploads, fields', async () => {
   assert.ok(!tree.readme.includes('<script'), 'README sanitized');
   assert.ok(!tree.readme.includes('javascript:'), 'no js: links');
   assert.ok(!fs.existsSync(path.join(DATA, 'source', 'evil.txt')) && !fs.existsSync(path.join(DATA, 'evil.txt')));
+  // Windows-hostile names are left out and reported; deep paths and unicode are kept
+  const w = new AdmZip();
+  const deep = 'p/' + Array.from({ length: 12 }, (_, i) => `folder_number_${i}`).join('/') + '/deep_file.py';
+  for (const [n, c] of [['p/README.md', 'upper'], ['p/readme.md', 'lower'], ['p/CON.txt', 'x'], ['p/a:b.txt', 'x'], ['p/trail.', 'x'], ['p/données/été.txt', 'u'], [deep, 'd']]) w.addFile(n, Buffer.from(c));
+  const wr = ok(await p[0].upload('/api/submission/zip', 'win.zip', w.toBuffer()));
+  assert.deepEqual(wr.skipped.map((x) => x.why).sort(), ['character not allowed in file names', 'name ends with a dot or space', 'name reserved by Windows', 'same name as another file except for upper/lower case'].sort());
+  const wt = ok(await p[0].get(`/api/source/${teamA.id}/zip/tree`)).tree.filter((x) => !x.dir).map((x) => x.path);
+  assert.ok(wt.includes(deep.slice(2)) && wt.includes('données/été.txt') && wt.includes('README.md'));
+  assert.equal(ok(await p[0].get(`/api/source/${teamA.id}/zip/file?path=${encodeURIComponent('README.md')}`)).file.text, 'upper', 'first of a case pair kept');
+  ok(await p[0].get(`/api/source/${teamA.id}/zip/file?path=${encodeURIComponent(deep.slice(2))}`));
+  ok(await p[0].upload('/api/submission/zip', 'proj.zip', z.toBuffer()));
   status(await p[0].upload('/api/submission/zip', 'x.zip', Buffer.from('not a zip')), 400);
   status(await p[0].upload('/api/submission/video', 'x.exe', Buffer.from('MZ')), 400, 'bad extension');
   ok(await p[1].upload('/api/submission/video', 'demo.mp4', Buffer.alloc(2048, 1), { seconds: '290' }));

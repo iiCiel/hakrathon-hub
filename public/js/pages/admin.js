@@ -59,7 +59,7 @@ async function overview() {
         h('p', { class: 'faint' }, 'Use for team matching. Assign them from here or the People tab.'),
         h('table', { class: 'tbl' }, h('tbody', null, d.unassigned.map((u) => h('tr', null, h('td', null, h('b', null, u.name), h('div', { class: 'faint' }, u.email)),
           h('td', null, u.preferred_role || '—', h('div', { class: 'faint' }, u.major)), h('td', { class: 'faint' }, u.skills),
-          h('td', null, h('select', { 'aria-label': `Assign ${u.name} to a team`, onchange: async (e) => { if (!e.target.value) return; try { await api.patch(`/api/admin/users/${u.id}`, { team_id: Number(e.target.value) }); toast(`${u.name} assigned.`, 'ok'); draw(); } catch (ex) { toast(ex.message, 'bad'); } } },
+          h('td', null, h('select', { 'aria-label': `Assign ${u.name} to a team`, onchange: async (e) => { if (!e.target.value) return; if (await assignTeam(u, Number(e.target.value))) { toast(`${u.name} assigned.`, 'ok'); draw(); } else e.target.value = ''; } },
             h('option', { value: '' }, 'Assign to…'), d.teams.map((t) => h('option', { value: t.id }, `${t.name} (${t.members.length})`))))))))) : null,
       h('section', { class: 'card' }, h('h2', null, 'Exports'), h('div', { class: 'row' },
         [['results', 'Results'], ['scores', 'All scorecards'], ['teams', 'Rosters'], ['users', 'Users'], ['mentor-log', 'Mentor log'], ['submission-log', 'Submission timestamps']]
@@ -189,9 +189,21 @@ async function people() {
             } }, 'Reset pw'),
             u.id !== state.me.id ? h('button', { class: 'btn ghost sm', onclick: () => patch(u, { disabled: !u.disabled }) }, u.disabled ? 'Enable' : 'Disable') : null))))))));
   };
-  const patch = async (u, body) => { try { await api.patch(`/api/admin/users/${u.id}`, body); toast('Saved.', 'ok'); draw(); } catch (e) { toast(e.message, 'bad'); draw(); } };
+  const patch = async (u, body) => {
+    if ('team_id' in body && body.team_id) { if (await assignTeam(u, body.team_id)) toast('Saved.', 'ok'); draw(); return; }
+    try { await api.patch(`/api/admin/users/${u.id}`, body); toast('Saved.', 'ok'); draw(); } catch (e) { toast(e.message, 'bad'); draw(); }
+  };
   await draw();
   return root;
+}
+
+// Put someone on a team; a full team asks first (the event rule is 3–5 per team).
+async function assignTeam(u, teamId) {
+  try { await api.patch(`/api/admin/users/${u.id}`, { team_id: teamId }); return true; } catch (e) {
+    if (e.status !== 409) { toast(e.message, 'bad'); return false; }
+    if (!(await confirmBox('Team is full', `${e.message} Add ${u.name} anyway?`, 'Add anyway'))) return false;
+    try { await api.patch(`/api/admin/users/${u.id}`, { team_id: teamId, force: true }); return true; } catch (e2) { toast(e2.message, 'bad'); return false; }
+  }
 }
 
 // ---------------- access codes ----------------

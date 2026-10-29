@@ -87,9 +87,9 @@ function pump() {
 }
 const queueDepth = () => ({ active, waiting: queue.length, max: MAX_CONCURRENT });
 
-function safeRel(p) {
+function safeRel(p, max = 200) {
   const norm = String(p).replace(/\\/g, '/').replace(/^\/+/, '');
-  if (!norm || norm.length > 200) return null;
+  if (!norm || norm.length > max) return null;
   const parts = norm.split('/');
   // Also reject Windows device names (CON, NUL, COM1.txt...) and segments ending in a dot or space,
   // which Windows silently rewrites (so "a. " could alias another path).
@@ -141,7 +141,11 @@ function dockerArgs(name, srcDir, script, entry, opts) {
     '-w', '/tmp',
     ...EXTRA,
     IMAGE,
-    'sh', '-c', `cp -r /src /tmp/w && cd /tmp/w && ${script}`, 'sh', entry || '',
+    // Work on a copy in /tmp (programs may write files). Shell scripts made on Windows have CRLF
+    // line endings that bash can't run, so the copy gets LF. A project too big for the scratch space
+    // runs read-only from /src instead.
+    'sh', '-c', 'if cp -r /src /tmp/w 2>/dev/null; then cd /tmp/w && find . -name "*.sh" -type f -exec sed -i "s/\\r$//" {} + 2>/dev/null; '
+      + 'else rm -rf /tmp/w; echo "[runner] Project is too big to copy into the sandbox scratch space; running it read-only." >&2; cd /src; fi; ' + script, 'sh', entry || '',
   ];
 }
 
