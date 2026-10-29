@@ -1,6 +1,6 @@
 import { h, clear, field, toast, formData, busy, fmtAgo, fmtTime, badge, modal } from '../ui.js';
 import { api } from '../api.js';
-import { state, on, role, now, frozen } from '../app.js';
+import { state, on, role, now, frozen, route } from '../app.js';
 
 const STATUS = { open: ['Waiting', 'warn'], claimed: ['Mentor on the way', 'blue'], resolved: ['Resolved', 'ok'], cancelled: ['Cancelled', ''] };
 
@@ -41,7 +41,9 @@ async function participantView() {
   field('What do you need?', h('textarea', { name: 'summary', required: true, maxlength: 500, placeholder: 'e.g. Our Flask app can’t read the CSV after deploying — getting a FileNotFoundError.' })),
   h('button', { class: 'btn', type: 'submit' }, 'Request mentor'));
   // Build freeze passing while the page is open closes the form (what was typed stays visible).
+  let reopened = false;
   on('tick', () => {
+    if ((form.dataset.closed || form.tagName !== 'FORM') && !frozen() && !reopened) { reopened = true; route(); return; } // more time was given
     if (!frozen() || form.tagName !== 'FORM' || !form.isConnected || form.dataset.closed) return;
     form.dataset.closed = '1';
     for (const el of form.elements) el.disabled = true;

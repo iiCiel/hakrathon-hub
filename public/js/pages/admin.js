@@ -284,8 +284,10 @@ async function codes() {
 // ---------------- scoring ----------------
 async function scoring() {
   const root = h('div', { class: 'stack' });
+  let typing = false;
   const draw = async () => {
     const d = await api.get('/api/admin/tabulation');
+    typing = false;
     const s = d.settings;
     const teamName = (id) => (d.rows.find((r) => r.team_id === id) || {}).team || '—';
     const toggle = (k, label, hint, confirmText) => h('label', { class: 'check', style: { marginBottom: '10px' } },
@@ -359,7 +361,17 @@ async function scoring() {
         h('div', { class: 'row', style: { marginTop: '12px' } }, h('a', { class: 'btn secondary', href: '#/results' }, 'Preview results page'))));
   };
   await draw();
-  on('staff:update', draw); on('event:update', draw);
+  // Live updates must not wipe award notes being typed: offer a refresh instead while editing.
+  let banner = null;
+  root.addEventListener('input', (e) => { if (e.target.matches('textarea, input[type=text]')) typing = true; });
+  const update = () => {
+    if (!typing && !root.querySelector('textarea:focus, input[type=text]:focus')) { banner = null; return draw(); }
+    if (banner && banner.isConnected) return;
+    banner = h('div', { class: 'card row', role: 'status', style: { borderColor: 'var(--gold)', position: 'sticky', top: '8px', zIndex: 6 } },
+      h('b', null, 'Scores changed.'), h('span', { class: 'spacer' }), h('button', { class: 'btn sm', onclick: () => { typing = false; banner = null; draw(); } }, 'Refresh (unsaved notes are lost)'));
+    root.prepend(banner);
+  };
+  on('staff:update', update); on('event:update', update);
   return root;
 }
 

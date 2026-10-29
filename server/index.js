@@ -81,6 +81,7 @@ const server = http.createServer(app);
 // busy Wi-Fi or ngrok can take longer than that, so uploads get an hour; headers must still arrive fast.
 server.requestTimeout = 60 * 60 * 1000;
 server.headersTimeout = 60 * 1000;
+server.timeout = 120 * 1000; // but a connection that goes quiet for 2 minutes is dropped
 // WebSocket upgrades ignore CORS, so check Origin ourselves: only pages served by this portal may connect.
 const io = new Server(server, {
   serveClient: true, maxHttpBufferSize: 1e5, cors: { origin: false },
@@ -123,7 +124,7 @@ io.on('connection', (socket) => {
     const t = me && get('SELECT * FROM teams WHERE id = ?', Number(msg.teamId));
     if (!t || !canRead(me, t)) return;
     const p = typeof msg.path === 'string' ? msg.path.slice(0, 200) : '';
-    io.to([`team:${t.id}`, 'helpdesk']).emit('presence', { user: { id: me.id, name: me.name }, path: p, at: Date.now() });
+    io.to([`team:${t.id}`, 'helpdesk']).emit('presence', { teamId: t.id, user: { id: me.id, name: me.name }, path: p, at: Date.now() });
   });
 });
 bus.disconnectToken = async (token) => {
@@ -165,7 +166,13 @@ function bootstrapAdmin() {
 }
 
 // ---------- background jobs ----------
-const { freezeSweep } = require('./routes/submit');
+const { freezeSweep, pinSweep } = require('./routes/submit');
+let pinBusy = false;
+setInterval(async () => {
+  if (pinBusy) return;
+  pinBusy = true;
+  try { await pinSweep(); } catch (e) { console.error('[pin]', e); } finally { pinBusy = false; }
+}, 2000).unref();
 let sweeping = false;
 setInterval(async () => {
   if (sweeping) return;

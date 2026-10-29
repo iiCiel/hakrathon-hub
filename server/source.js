@@ -22,7 +22,7 @@ const OWNER_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/, REPO_RE = /^[A-Za-z0-9._
 // address (git@github.com:o/r.git), and links to a folder, file, branch or the PR list inside it.
 function parseGithubUrl(url) {
   let u = String(url || '').trim();
-  const ssh = /^(?:ssh:\/\/)?git@github\.com[:/](.+)$/i.exec(u);
+  const ssh = /^(?:ssh:\/\/git@github\.com(?::\d+)?\/|git@github\.com:)(.+)$/i.exec(u);
   if (ssh) u = `https://github.com/${ssh[1]}`;
   u = u.replace(/^(?:https?:\/\/)?(?:www\.)?github\.com(?=\/|$)/i, 'https://github.com');
   const m = /^https:\/\/github\.com\/([^/?#]+)\/([^/?#]+)/.exec(u);
@@ -85,6 +85,7 @@ function withLock(key, fn) {
   return next;
 }
 const MAX_ENTRY = 100 * 1024 * 1024;
+const MAX_REPO_FILES = 100000;
 const NOTEBOOK_MAX = 1024 * 1024;
 const entryData = (e) => new Promise((resolve, reject) => e.getDataAsync((data, err) => (err ? reject(err) : resolve(data))));
 const EXEC_NAME = /(\.(sh|bash|py|pl|rb)$)|(^|\/)(gradlew|mvnw|configure|run|start)$/;
@@ -123,10 +124,12 @@ async function snapshotRepo(teamId, url, { useToken = false, before = 0, pin = '
   if (!gh) throw Object.assign(new Error(githubUrlProblem(url)), { status: 400 });
   const root = path.join(SRC_DIR, `team-${Number(teamId)}`);
   await fsp.mkdir(root, { recursive: true });
+  // Leftovers from a crash mid-snapshot (only one snapshot runs per team at a time).
+  for (const n of await fsp.readdir(root)) if (/^(repo-git-|repo-tmp-|repo\.old-)/.test(n)) await fsp.rm(path.join(root, n), { recursive: true, force: true }).catch(() => {});
   const id = crypto.randomBytes(4).toString('hex');
   const gitDir = path.join(root, `repo-git-${id}`), tmp = path.join(root, `repo-tmp-${id}`);
   const env = authEnv(useToken);
-  const cleanup = () => { for (const d of [gitDir, tmp]) fsp.rm(d, { recursive: true, force: true }).catch(() => {}); };
+  const cleanup = () => { for (const d of [gitDir, `${gitDir}-full`, tmp]) fsp.rm(d, { recursive: true, force: true }).catch(() => {}); };
   const fail = (msg, log) => { cleanup(); if (log) console.error(`[git] team ${teamId}: ${scrub(log).slice(-500)}`); return Object.assign(new Error(msg), { status: 400 }); };
   const limit = before ? 150000 : 90000;
   // A freeze snapshot needs some history to find the pre-freeze commit (blobless: file contents come later).
@@ -163,7 +166,12 @@ async function snapshotRepo(teamId, url, { useToken = false, before = 0, pin = '
     const tab = rec.indexOf('\t'); const [mode, type, sha] = rec.slice(0, tab).split(' ');
     return { mode, type, sha, path: rec.slice(tab + 1) };
   });
+  if (entries.length > MAX_REPO_FILES) throw fail(`Repository has more than ${MAX_REPO_FILES.toLocaleString('en-US')} files. Remove generated folders (node_modules, build output) from the repo or upload a zip.`);
   for (const e of entries) if (e.type === 'commit') notes.push({ path: e.path, why: 'submodule (a separate repository; not included)' });
+  // Judges must see exactly what is on GitHub: ignore the repo's own export-ignore / export-subst
+  // rules (they could hide files or rewrite text). info/attributes outranks the repo's .gitattributes.
+  await fsp.mkdir(path.join(gitDir, '.git', 'info'), { recursive: true });
+  await fsp.writeFile(path.join(gitDir, '.git', 'info', 'attributes'), '* -export-subst -export-ignore\n');
   await fsp.mkdir(tmp);
   let w = makeWriter(tmp, { maxBytes: MAX_BYTES });
   try {
@@ -267,6 +275,23 @@ function copyByIds(cwd, entries, w, limit) {
   });
 }
 
+// pax records are "<length> <key>=<value>\n", with the length in bytes (values may hold newlines).
+function parsePax(buf) {
+  const out = {};
+  let p = 0;
+  while (p < buf.length) {
+    const sp = buf.indexOf(32, p);
+    if (sp < 0) break;
+    const len = Number(buf.toString('latin1', p, sp));
+    if (!Number.isInteger(len) || len <= sp - p + 1 || p + len > buf.length) throw new Error('bad pax header');
+    const rec = buf.toString('utf8', sp + 1, p + len - 1); // without the trailing newline
+    const eq = rec.indexOf('=');
+    if (eq > 0) out[rec.slice(0, eq)] = rec.slice(eq + 1);
+    p += len;
+  }
+  return out;
+}
+
 // Minimal streaming tar reader (ustar + pax long names), enough for what `git archive` writes.
 async function readTar(stream, onEntry) {
   const { fill, take, read, skip } = byteReader(stream);
@@ -277,16 +302,22 @@ async function readTar(stream, onEntry) {
     if (hd.every((b) => b === 0)) return;
     const field = (a, b) => hd.subarray(a, b).toString('utf8').replace(/\0[\s\S]*$/, '');
     const type = hd[156] ? String.fromCharCode(hd[156]) : '0';
-    let size = parseInt(field(124, 136).trim() || '0', 8) || 0;
+    const sizeField = field(124, 136).trim();
+    if (!/^[0-7]*$/.test(sizeField)) throw new Error('bad tar header');
+    let size = parseInt(sizeField || '0', 8);
     const mode = parseInt(field(100, 108).trim() || '0', 8) || 0;
     if (type === 'x' || type === 'g') {
-      const body = (await read(Math.ceil(size / 512) * 512)).subarray(0, size).toString('utf8');
-      if (type === 'x') { pax = {}; for (const m of body.matchAll(/\d+ ([^=]+)=([^\n]*)\n/g)) pax[m[1]] = m[2]; }
+      if (size > 1024 * 1024) throw new Error('bad tar header');
+      const body = (await read(Math.ceil(size / 512) * 512)).subarray(0, size);
+      if (type === 'x') pax = parsePax(body);
       continue;
     }
     const prefix = hd.subarray(257, 262).toString('latin1') === 'ustar' ? field(345, 500) : '';
     let name = pax.path || (prefix ? `${prefix}/${field(0, 100)}` : field(0, 100));
-    if (pax.size) size = Number(pax.size) || size;
+    if (pax.size !== undefined) {
+      if (!/^\d+$/.test(pax.size)) throw new Error('bad tar header');
+      size = Number(pax.size);
+    }
     pax = {};
     const padded = Math.ceil(size / 512) * 512;
     if ((type === '0' || type === '7') && size <= MAX_ENTRY) {
@@ -304,7 +335,7 @@ async function readTar(stream, onEntry) {
 // paths only, nothing Windows can't store, case-insensitive duplicates skipped, a total size cap,
 // and scripts kept executable. Every file left out is recorded with a plain-English reason.
 function makeWriter(dir, { maxBytes = MAX_BYTES } = {}) {
-  const seen = new Set();
+  const seen = new Set(), folders = new Set(); // lower-case, so Windows case-insensitivity can't clash
   const w = { skipped: [], count: 0, bytes: 0,
     async add(name, mode, data, type = 'file', size = 0) {
       name = String(name).replace(/\\/g, '/');
@@ -317,8 +348,13 @@ function makeWriter(dir, { maxBytes = MAX_BYTES } = {}) {
       if (!full.startsWith(dir + path.sep)) { w.skipped.push({ path: name, why: 'outside the project folder' }); return; }
       const key = rel.toLowerCase();
       if (seen.has(key)) { w.skipped.push({ path: name, why: 'same name as another file except for upper/lower case' }); return; }
+      if (folders.has(key)) { w.skipped.push({ path: name, why: 'a folder has the same name' }); return; }
+      const parents = key.split('/').slice(0, -1).map((_, i, a) => a.slice(0, i + 1).join('/'));
+      if (parents.some((d) => seen.has(d))) { w.skipped.push({ path: name, why: 'a file has the same name as its folder' }); return; }
       if (!data) { w.skipped.push({ path: name, why: `single file larger than ${MAX_ENTRY / 1048576} MB` }); return; }
+      if (w.count >= MAX_REPO_FILES) throw Object.assign(new Error(`More than ${MAX_REPO_FILES.toLocaleString('en-US')} files.`), { status: 400 });
       seen.add(key);
+      for (const d of parents) folders.add(d);
       w.bytes += data.length;
       if (w.bytes > maxBytes) throw Object.assign(new Error(`Files add up to more than ${maxBytes / 1048576} MB. Remove large files (datasets, videos, build output) and try again.`), { status: 400 });
       if (data.length < 300 && data.subarray(0, 40).toString('latin1').startsWith('version https://git-lfs.github.com/spec/')) w.skipped.push({ path: name, why: 'stored with Git LFS: only a placeholder is in the repository' });
@@ -344,7 +380,7 @@ async function extractZipNow(teamId, zipPath) {
   // Strip a single shared top-level folder (e.g. GitHub "repo-main/").
   const names = entries.map((e) => e.entryName.replace(/\\/g, '/'));
   const junk = (n) => n.startsWith('__MACOSX/') || /(^|\/)\.DS_Store$/.test(n) || /(^|\/)Thumbs\.db$/i.test(n);
-  const real = names.filter((n) => !/^([\\/]|[a-zA-Z]:)/.test(n) && !junk(n));
+  const real = names.filter((n) => !/^([\\/]|[a-zA-Z]:[\\/])/.test(n) && !junk(n));
   if (!real.length) throw Object.assign(new Error('That zip has no files in it.'), { status: 400 });
   const firsts = new Set(real.map((n) => n.split('/')[0]));
   const strip = firsts.size === 1 && real.every((n) => n.includes('/')) ? [...firsts][0] + '/' : '';
@@ -359,7 +395,7 @@ async function extractZipNow(teamId, zipPath) {
     for (let i = 0; i < entries.length; i++) {
       const e = entries[i];
       let name = names[i];
-      if (/^([\\/]|[a-zA-Z]:)/.test(name)) { w.skipped.push({ path: name, why: 'absolute path' }); continue; } // never valid in a zip
+      if (/^([\\/]|[a-zA-Z]:[\\/])/.test(name)) { w.skipped.push({ path: name, why: 'absolute path' }); continue; } // never valid in a zip
       if (junk(name)) continue; // Mac/Windows clutter (checked before the top folder is stripped)
       if (strip && name.startsWith(strip)) name = name.slice(strip.length);
       if (((e.attr >>> 16) & 0o170000) === 0o120000) { await w.add(name, 0, null, 'link'); continue; }
@@ -498,7 +534,9 @@ function renderMarkdown(md, { base = '' } = {}) {
       },
       img: (tag, attribs) => {
         const rel = base ? localRef(attribs.src) : null;
-        const src = rel && IMG_EXT.test(rel) ? `${base}/raw?inline=1&path=${encodeURIComponent(rel)}` : attribs.src;
+        const remote = /^[a-z][a-z0-9+.-]*:|^\/\//i.test(String(attribs.src || '').trim());
+        // Pictures from the project load from the snapshot; any other local address is dropped.
+        const src = rel && IMG_EXT.test(rel) ? `${base}/raw?inline=1&path=${encodeURIComponent(rel)}` : base && !remote ? '' : attribs.src;
         return { tagName: 'img', attribs: { ...attribs, src, referrerpolicy: 'no-referrer', loading: 'lazy' } };
       },
       // Only GitHub-style task-list checkboxes; never a text or password field (others are dropped).
@@ -522,4 +560,12 @@ function purgeTeam(teamId) {
   fsp.rm(path.join(DATA_DIR, 'uploads', `team-${id}`), { recursive: true, force: true }).catch(() => {});
 }
 
-module.exports = { parseGithubUrl, githubUrlProblem, remoteHead, readTar, snapshotRepo, extractZip, removeZip, withLock, sourceFilePath, decodeText, notebookText, listTree, readSourceFile, readme, renderMarkdown, teamDir, hasSource, purgeTeam, SRC_DIR };
+// Git version (for the rehearsal checklist): repo snapshots need git, and 2.39.1+ has the
+// security fixes for formatting and archive bugs.
+const gitInfo = { version: '', ok: false };
+git(['--version'], { timeout: 10000 }).then((r) => {
+  const m = /(\d+)\.(\d+)\.(\d+)/.exec(r.stdout || '');
+  gitInfo.version = m ? m[0] : '';
+  gitInfo.ok = !!m && (Number(m[1]) * 1e6 + Number(m[2]) * 1e3 + Number(m[3])) >= 2039001;
+});
+module.exports = { gitInfo, parseGithubUrl, githubUrlProblem, remoteHead, readTar, snapshotRepo, extractZip, removeZip, withLock, sourceFilePath, decodeText, notebookText, listTree, readSourceFile, readme, renderMarkdown, teamDir, hasSource, purgeTeam, SRC_DIR };

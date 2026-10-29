@@ -90,6 +90,7 @@ r.put('/workspace/:teamId/file', wrap((req) => {
   const totals = get('SELECT COUNT(*) AS n, COALESCE(SUM(length(CAST(content AS BLOB))),0) AS bytes FROM files WHERE team_id = ?', t.id);
   if (!existing && totals.n >= MAX_FILES) throw new HttpError(413, `Workspace file limit reached (${MAX_FILES}).`);
   if (totals.bytes - (existing ? existing.size : 0) + Buffer.byteLength(content) > MAX_TOTAL) throw new HttpError(413, 'Workspace is full (5 MB). Use GitHub for larger projects.');
+  if (existing && b.create === 'only') throw new HttpError(409, 'A file with that name already exists.');
   if (existing) {
     if (b.baseVersion !== undefined && !b.force && Number(b.baseVersion) !== existing.version) {
       const cur = get('SELECT f.content, f.version, u.name AS updated_by FROM files f LEFT JOIN users u ON u.id = f.updated_by WHERE f.team_id = ? AND f.path = ?', t.id, p);

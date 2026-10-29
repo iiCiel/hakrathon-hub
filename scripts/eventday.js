@@ -425,7 +425,9 @@ async function main() {
     const warn = sub.completeness.items.find((x) => x.id === 'video');
     check(!vid || (warn && warn.warn), 'a 6-minute video is flagged (judging stops at 5:00)', warn && warn.warn);
     const ov = (await admin.get('/api/admin/overview')).data;
-    check(ov.teams.filter((x) => x.completeness.complete).length === 9, '9 of 10 packages complete on the admin overview', `${ov.teams.filter((x) => x.completeness.complete).length}`);
+    const nComplete = ov.teams.filter((x) => x.completeness.complete).length;
+    // Without GitHub (SKIP_NET) the repo-only teams have no prototype, so fewer are complete.
+    check(NET ? nComplete === 9 : nComplete >= 5, NET ? '9 of 10 packages complete on the admin overview' : 'packages complete on the admin overview (repo teams skipped)', `${nComplete}`);
     if (RUN) {
       const zt = teams.find((t) => t.kind === 'zip' && t.lang === 'python');
       const r = await zt.members[0].post('/api/run/source', { teamId: zt.id, kind: 'zip', stdin: 'Ava' });

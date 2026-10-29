@@ -58,6 +58,9 @@ export function sourceRunner(teamId, kind, command, { allowEdit = true } = {}) {
   const btn = h('button', { class: 'btn', onclick: async () => {
     if (!cmd.value.trim()) return toast('Enter a run command.', 'bad');
     btn.disabled = true;
+    // Installs need the internet, which the sandbox doesn't have: say so instead of a silent timeout.
+    const installs = /\b(npm|yarn|pnpm)\s+(i|install|ci|add)\b|\bpip3?\s+install\b|\bpython3?\s+-m\s+pip\s+install\b|\bapt(-get)?\s+install\b|\bgem\s+install\b/.test(cmd.value);
+    if (installs) toast('The sandbox has no internet, so package installs fail. Dependencies must already be in the project (or use the live link / video).', '', 10000);
     clear(out, h('span', { class: 'sys' }, `$ ${cmd.value}\n`), h('span', { class: 'spinner' }));
     try {
       const r = await api.post('/api/run/source', { teamId, kind, command: cmd.value, stdin: stdin.value });
@@ -87,7 +90,7 @@ export function submissionView(team, sub, { briefFields, disclosureFields }) {
   const proto = h('section', { class: 'card stack' }, h('h2', null, '1 · Working prototype'), linkRow('Live link:', s.prototype_url));
   if (s.repo_url) {
     proto.append(h('div', null, linkRow('Repository:', s.repo_url),
-      s.repo_sha ? h('div', { class: 'faint', style: { marginTop: '4px' } }, `Snapshot${s.repo_official ? ' (official, last commit before build freeze)' : s.repo_after_freeze ? ' (taken at freeze, but every commit is dated after the freeze)' : s.frozen ? ' (not the official freeze snapshot)' : ''}: `, h('code', null, s.repo_sha.slice(0, 10)), ` on ${s.repo_branch || 'default branch'} · last commit ${fmtDateTime(s.repo_commit_date)} · captured ${fmtDateTime(s.repo_snapshot_at)}`,
+      s.repo_sha ? h('div', { class: 'faint', style: { marginTop: '4px' } }, `Snapshot${s.repo_official ? ' (official, last commit before build freeze)' : s.repo_after_freeze ? ' (taken at freeze, but every commit is dated after the freeze)' : s.repo_unpinned ? ' (freeze snapshot, but the commit GitHub had at the freeze couldn’t be recorded: commit dates not verified)' : s.frozen ? ' (not the official freeze snapshot)' : ''}: `, h('code', null, s.repo_sha.slice(0, 10)), ` on ${s.repo_branch || 'default branch'} · last commit ${fmtDateTime(s.repo_commit_date)} · captured ${fmtDateTime(s.repo_snapshot_at)}`,
         s.repo_commit_date && new Date(s.repo_commit_date) > new Date(s.freeze_at) ? h('span', { class: 'badge bad', style: { marginLeft: '6px' } }, 'Commit after freeze') : null) : null,
       s.repo_error ? h('div', { class: 'badge bad', style: { whiteSpace: 'normal', marginTop: '6px' } }, s.repo_error) : null));
   }

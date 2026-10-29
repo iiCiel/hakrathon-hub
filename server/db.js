@@ -203,6 +203,8 @@ addColumn('checkpoints', 'updated_at', "TEXT DEFAULT ''");
 addColumn('checkpoints', 'updated_by', 'INTEGER');
 addColumn('submissions', 'repo_after_freeze', 'INTEGER DEFAULT 0');
 addColumn('submissions', 'repo_freeze_head', "TEXT DEFAULT ''"); // "<url> <sha>": what GitHub had at the freeze
+addColumn('submissions', 'repo_prefreeze_head', "TEXT DEFAULT ''"); // "<url> <sha>": last seen in the minutes before the freeze (fallback)
+addColumn('submissions', 'repo_pinned', 'INTEGER DEFAULT 0'); // official snapshot came from a recorded commit
 
 const stmtCache = new Map();
 function prep(sql) {

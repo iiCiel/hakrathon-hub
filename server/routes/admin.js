@@ -12,7 +12,7 @@ const offline = require('../offline');
 const democlock = require('../democlock');
 const { teamPublic, getCheckpoints, emailAllowed } = require('./core');
 const { postMessage } = require('./chat');
-const { completeness, subRow, adminSnapshot } = require('./submit');
+const { completeness, subRow, adminSnapshot, resetFreezeSnapshot } = require('./submit');
 const { tabulate } = require('./judge');
 const { wrap, str, int, now, code, bus, HttpError } = require('../util');
 
@@ -75,7 +75,7 @@ r.put('/admin/settings', wrap((req) => {
   if (s.team_min > s.team_max) { S.setSettings({ team_min: before.team_min, team_max: before.team_max }); throw new HttpError(400, 'Team minimum is larger than maximum.'); }
   // Moving the freeze later re-opens teams; their official snapshot must be re-taken at the new freeze.
   if ('build_freeze_at' in patch || 'global_extension_minutes' in patch) {
-    for (const t of all('SELECT * FROM teams')) if (!S.isFrozen(t)) run("UPDATE submissions SET repo_final = 0, repo_freeze_head = '' WHERE team_id = ?", t.id);
+    for (const t of all('SELECT * FROM teams')) if (!S.isFrozen(t)) resetFreezeSnapshot(t.id);
   }
   audit(req.user.id, 'settings', Object.keys(patch));
   bus.emit('all', 'event:update', {});
@@ -213,7 +213,7 @@ r.patch('/admin/teams/:id', wrap((req) => {
     'table_no' in b ? str(b.table_no, { max: 10 }) : t.table_no, ext, t.id);
   if (ext !== t.extension_minutes) {
     const nt = get('SELECT * FROM teams WHERE id = ?', t.id);
-    if (!S.isFrozen(nt)) run("UPDATE submissions SET repo_final = 0, repo_freeze_head = '' WHERE team_id = ?", t.id);
+    if (!S.isFrozen(nt)) resetFreezeSnapshot(t.id);
     run('INSERT INTO submission_log (team_id, user_id, action, detail) VALUES (?,?,?,?)', t.id, req.user.id, 'freeze.extension', `${ext} minutes`);
   }
   audit(req.user.id, 'team.update', { id: t.id, name, lane, ext });
@@ -348,6 +348,7 @@ function rehearsalAuto() {
     { id: 'judges', label: `Judges registered (minimum ${st.min_judges})`, ok: judges >= st.min_judges, detail: `${judges} registered, ${judgeCodes} unused judge code${judgeCodes === 1 ? '' : 's'}` },
     { id: 'mentors', label: 'Mentors registered', ok: mentors > 0, detail: `${mentors} registered, ${mentorCodes} unused mentor code${mentorCodes === 1 ? '' : 's'}` },
     { id: 'tables', label: 'Every team has a table number', ok: teams.length > 0 && !noTable.length, info: !teams.length, detail: teams.length ? (noTable.length ? `Missing: ${noTable.slice(0, 5).map((t) => t.name).join(', ')}${noTable.length > 5 ? '…' : ''}` : `${teams.length} teams`) : 'No teams yet (they form at 8:35 on the day)' },
+    { id: 'git', label: 'Git installed (2.39.1 or newer) for repo snapshots', ok: source.gitInfo.ok, detail: source.gitInfo.version ? `git ${source.gitInfo.version}` : 'Git not found: install Git for Windows' },
     { id: 'runner', label: 'Code runner ready (Docker sandbox)', ok: !!r.ready && runner.MODE === 'docker', detail: r.ready ? (runner.MODE === 'docker' ? 'Ready' : `Mode ${runner.MODE}: not safe for students`) : r.reason || 'Not ready' },
     { id: 'times', label: 'Event times in order (roster lock → CP1 → CP2 → freeze → validation)', ok: ordered, detail: `Freeze ${day} ${freezeShown.toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit' })}` },
     { id: 'future', label: 'Build freeze is still ahead', ok: T('build_freeze_at') > Date.now() },

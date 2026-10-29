@@ -7,11 +7,11 @@ export async function render() {
   if (role() !== 'participant') { go('#/teams'); return h('div'); }
   if (!state.team) return h('div', { class: 'card empty' }, h('p', null, 'Join a team first.'), h('a', { class: 'btn', href: '#/team' }, 'Team page'));
   const root = h('div');
-  let data, dirtyForm = false;
+  let data, dirtyForm = false, savingNow = false; // savingNow: our own save's live update isn't a teammate's
 
   const load = async () => { data = await api.get('/api/submission'); draw(); };
   const draw = () => clear(root, view());
-  on('submission:update', (ev) => { if (!dirtyForm) load(); else if (!(ev && ev.resync)) toast('A teammate saved part of the package. When you save, only the fields you changed are sent, so their work is kept.', '', 8000); });
+  on('submission:update', (ev) => { if (savingNow) return; if (!dirtyForm) load(); else if (!(ev && ev.resync)) toast('A teammate saved part of the package. When you save, only the fields you changed are sent, so their work is kept.', '', 8000); });
   // Registered once (view() runs on every redraw). An extension or freeze changes what can be edited.
   let tickFn = null;
   on('tick', (t) => tickFn && tickFn(t));
@@ -54,10 +54,16 @@ export async function render() {
         if (Object.keys(dc).length) body.disclosure = dc;
         const oldSecs = s.video_seconds && !s.video_file ? fmtDur(s.video_seconds) : '';
         if (!s.video_file && videoSecs.value !== oldSecs) body.video_seconds = parseDur(videoSecs.value);
-        data.submission = (await api.put('/api/submission', body)).submission;
-        dirtyForm = false;
-        toast('Submission saved.', 'ok');
-        draw();
+        const typed = () => [...root.querySelectorAll('input, textarea')].map((el) => el.value).join('\u0001');
+        const before = typed();
+        savingNow = true;
+        const saved = await api.put('/api/submission', body).then((r) => r.submission).finally(() => { setTimeout(() => { savingNow = false; }, 300); });
+        data.submission = saved;
+        if (typed() !== before) {
+          // More was typed while this save was on its way: keep it on screen (and unsaved).
+          Object.assign(s, saved); dirtyForm = true; busy(saveBtn, false);
+          toast('Saved. You kept typing, so press Save again for the rest.', '', 6000);
+        } else { dirtyForm = false; toast('Submission saved.', 'ok'); draw(); }
       } catch (e) { toast(e.message, 'bad'); busy(saveBtn, false); }
     } }, 'Save changes');
     const saveBar = h('div', { class: 'card', hidden: true, style: { position: 'sticky', bottom: '12px', zIndex: 5, display: 'flex', alignItems: 'center', gap: '12px', borderColor: 'var(--gold)' } },
@@ -114,7 +120,7 @@ export async function render() {
       field('Project title', title),
       h('div', null, h('b', null, 'GitHub repository'), h('div', { class: 'faint', style: { margin: '2px 0 6px' } }, 'Must be public (or shared with staff). We take an official snapshot automatically at build freeze; you can snapshot any time before then to check it works.'),
         h('div', { class: 'row', style: { flexWrap: 'nowrap' } }, repoInput, snapBtn),
-        s.repo_sha ? h('div', { class: 'faint', style: { marginTop: '6px' } }, tick(true), ' Snapshot ', h('code', null, s.repo_sha.slice(0, 10)), ` · ${s.repo_branch} · captured ${fmtAgo(s.repo_snapshot_at, now())}`, ' ', s.repo_official ? badge('Official freeze snapshot', 'ok') : s.repo_after_freeze ? badge('No commit before the freeze', 'bad') : null, ' ', remover('repo', 'repository')) : null,
+        s.repo_sha ? h('div', { class: 'faint', style: { marginTop: '6px' } }, tick(true), ' Snapshot ', h('code', null, s.repo_sha.slice(0, 10)), ` · ${s.repo_branch} · captured ${fmtAgo(s.repo_snapshot_at, now())}`, ' ', s.repo_official ? badge('Official freeze snapshot', 'ok') : s.repo_after_freeze ? badge('No commit before the freeze', 'bad') : s.repo_unpinned ? badge('Freeze snapshot (unverified)', 'warn') : null, ' ', remover('repo', 'repository')) : null,
         s.repo_error ? h('div', { class: 'badge bad', style: { whiteSpace: 'normal', marginTop: '6px', display: 'block', padding: '6px 10px' } }, s.repo_error) : null),
       h('div', null, h('b', null, 'Or upload a zip'), h('div', { class: 'faint', style: { margin: '2px 0 6px' } }, 'Up to 100 MB (300 MB unpacked). Leave out venv and build folders. The sandbox has no internet, so a Node project only runs if node_modules is included; otherwise give judges a live link.'),
         s.zip_name ? h('div', { class: 'faint', style: { marginBottom: '6px' } }, tick(true), ` ${s.zip_name} · ${fmtDateTime(s.zip_at)} `, remover('zip', 'zip')) : null,
@@ -153,17 +159,25 @@ export async function render() {
     // ---------- side ----------
     const fz = freezeAt();
     const countdown = h('b', { style: { fontFamily: 'var(--mono)', fontSize: '1.4rem', color: 'var(--gold-ink)' } });
-    const tickDown = (t) => { countdown.textContent = t >= fz ? 'Locked' : fmtCountdownSafe(fz - t); };
-    tickDown(now());
-    let autoSaved = false;
+    const tickDown = (t, f) => { countdown.textContent = t >= f ? 'Locked' : fmtCountdownSafe(f - t); };
+    tickDown(now(), fz);
+    let autoSaved = false, lockedByTick = false;
     tickFn = (t) => {
-      tickDown(t);
+      const f = freezeAt(); // follows extensions
+      tickDown(t, f);
       // Unsaved edits a few seconds before the freeze: save them rather than lose them.
-      if (dirtyForm && !locked && !autoSaved && t < fz && fz - t < 5000) { autoSaved = true; saveBtn.click(); toast('Build freeze is seconds away: saving your changes now.', '', 6000); }
-      if (t >= fz && s.canEdit && !locked) {
-        locked = true;
+      if (dirtyForm && !locked && !autoSaved && t < f && f - t < 5000) { autoSaved = true; saveBtn.click(); toast('Build freeze is seconds away: saving your changes now.', '', 6000); }
+      if (t >= f && s.canEdit && !locked) {
+        locked = true; lockedByTick = true;
         if (!dirtyForm) load();
-        else { for (const el of root.querySelectorAll('input, textarea, select, button')) el.disabled = true; toast('Build freeze passed: this page is now read-only.', 'bad', 10000); }
+        else {
+          for (const el of root.querySelectorAll('input, textarea, select, button')) if (!el.disabled) { el.disabled = true; el.dataset.tickLocked = '1'; }
+          toast('Build freeze passed: this page is now read-only.', 'bad', 10000);
+        }
+      } else if (lockedByTick && t < f) { // more time was given: open the page again, keeping what was typed
+        locked = false; lockedByTick = false; autoSaved = false;
+        if (!dirtyForm) load();
+        else { for (const el of root.querySelectorAll('[data-tick-locked]')) { el.disabled = false; delete el.dataset.tickLocked; } toast('Your team got more time: you can edit again.', 'ok', 8000); }
       }
     };
     const logBox = h('div', { class: 'faint', style: { fontSize: '.82rem', maxHeight: '220px', overflowY: 'auto' } });

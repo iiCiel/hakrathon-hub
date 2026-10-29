@@ -30,7 +30,7 @@ function dispatch(ev, data) { for (const [e, fn] of pageHandlers) if (e === ev) 
 
 // ---------- data ----------
 export async function loadMe() {
-  const d = await api.get('/api/me', { quiet401: true });
+  const d = await api.get('/api/me', { quiet401: true, global: true });
   state.me = d.user; state.team = d.team; state.event = d.event; state.runner = d.runner; state.github = d.github;
   state.offset = new Date(d.serverTime).getTime() - Date.now();
   setDisplayShift(d.event && d.event.is_demo ? d.event.demo_shift_ms : 0);

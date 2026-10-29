@@ -197,6 +197,10 @@ test('workspace files, conflicts, access', async () => {
   ok(await mentor.get(`/api/workspace/${teamA.id}/files`));
   status(await mentor.put(`/api/workspace/${teamA.id}/file`, { path: 'a.py', content: 'x' }), 403, 'mentors read-only');
   status(await j[0].get(`/api/workspace/${teamA.id}/files`), 403, 'judges wait for freeze');
+  // "+ File" with a name that exists must not empty the team's file
+  const dupe = await p[0].put(`/api/workspace/${teamA.id}/file`, { path: 'main.py', content: '', create: 'only' });
+  status(dupe, 409);
+  assert.notEqual(ok(await p[0].get(`/api/workspace/${teamA.id}/file?path=main.py`)).file.content, '');
   ok(await p[0].post(`/api/workspace/${teamA.id}/rename`, { from: 'README.md', to: 'docs/README.md' }));
   // A teammate's autosave for the old name arrives after the rename: refused, the old file isn't recreated
   const late = await p[1].put(`/api/workspace/${teamA.id}/file`, { path: 'README.md', content: 'late edit', baseVersion: 1 });
@@ -271,6 +275,11 @@ test('uploads: teammates at once, Mac zips, encodings, notebooks, downloads', as
   // A Mac "Compress" zip: __MACOSX and .DS_Store left out, single top folder still stripped.
   ok(await p[0].upload('/api/submission/zip', 'mac.zip', mk([['MyApp/main.py', 'print(1)'], ['__MACOSX/MyApp/._main.py', 'x'], ['MyApp/.DS_Store', 'x']])));
   assert.deepEqual(ok(await p[0].get(`/api/source/${teamA.id}/zip/tree`)).tree.map((x) => x.path), ['main.py']);
+  // A file and a folder with the same name: the folder's files are kept, the clash is reported
+  const clash = ok(await p[0].upload('/api/submission/zip', 'clash.zip', mk([['p/a', 'file'], ['p/A/b.txt', 'in folder'], ['p/c/d.txt', 'x'], ['p/C', 'file2']])));
+  assert.equal(clash.skipped.length, 2, JSON.stringify(clash.skipped));
+  assert.ok(clash.skipped.every((x) => /same name as its folder|folder has the same name/.test(x.why)));
+  assert.equal(ok(await p[0].get(`/api/source/${teamA.id}/zip/tree`)).tree.filter((x) => !x.dir).length, 2);
   // Empty / folders-only zip, password-protected zip
   const empty = new AdmZip(); empty.addFile('only/', Buffer.alloc(0));
   status(await p[0].upload('/api/submission/zip', 'empty.zip', empty.toBuffer()), 400, 'empty zip');
@@ -303,6 +312,13 @@ test('uploads: teammates at once, Mac zips, encodings, notebooks, downloads', as
   const unk = ok(await p[0].upload('/api/submission/video', 'iphone.mov', Buffer.alloc(1024, 9))).submission;
   assert.equal(unk.video_seconds, null);
   assert.match(unk.completeness.items.find((i) => i.id === 'video').warn, /Length unknown/);
+  // MP4/MOV length comes from the file itself, not from what the browser says
+  const box = (type, body) => { const b = Buffer.alloc(8 + body.length); b.writeUInt32BE(8 + body.length); b.write(type, 4, 'latin1'); body.copy(b, 8); return b; };
+  const mv = Buffer.alloc(100); mv.writeUInt32BE(1000, 12); mv.writeUInt32BE(372000, 16); // v0: timescale 1000, 372 s
+  const mp4 = Buffer.concat([box('ftyp', Buffer.from('isom0000')), box('mdat', Buffer.alloc(64)), box('moov', box('mvhd', mv))]);
+  const lied = ok(await p[0].upload('/api/submission/video', 'demo.mov', mp4, { seconds: '100' })).submission;
+  assert.equal(lied.video_seconds, 372);
+  assert.match(lied.completeness.items.find((i) => i.id === 'video').warn, /6:12/);
   // Too-large message says the limit
   assert.match((await p[0].upload('/api/submission/brief', 'b.pdf', Buffer.alloc(16 * 1024 * 1024))).data.error, /15 MB/);
   // Restore the package the later tests expect
@@ -371,6 +387,7 @@ test('GitHub linking: URL forms, odd file names, empty repos, reservations, free
   process.env[`GIT_CONFIG_KEY_${n}`] = `url.git://127.0.0.1:${port}/qa-local/.insteadOf`;
   process.env[`GIT_CONFIG_VALUE_${n}`] = 'https://github.com/qa-local/';
   const d0 = '2026-11-06T10:00:00Z';
+  mkRepo('attrs', [{ date: d0, files: { '.gitattributes': 'secret.py export-ignore\nver.txt export-subst\n', 'secret.py': 'print("hidden?")\n', 'ver.txt': '$Format:%H$\n' } }]);
   mkRepo('odd', [{ date: d0, files: { 'README.md': '# Odd\n![shot](docs/shot.png)\n[guide](docs/guide.md) [top](#odd)\n<form><input type="text"></form>\n', 'readme.md': 'lower', 'CON.txt': 'x', 'a:b.txt': 'x', 'run.sh': { mode: '100755', content: 'echo hi\n' },
     'docs/shot.png': Buffer.from([0x89, 0x50, 0x4e, 0x47]), 'big.psd': 'version https://git-lfs.github.com/spec/v1\noid sha256:abc\nsize 9999999\n', 'lib/sub': { gitlink: 'a'.repeat(40) } } }]);
   let wait = 0;
@@ -379,6 +396,11 @@ test('GitHub linking: URL forms, odd file names, empty repos, reservations, free
   for (const u of ['git@github.com:qa-local/odd.git', 'www.github.com/qa-local/odd/tree/main/docs', 'http://GitHub.com/qa-local/odd.GIT', 'https://github.com/qa-local/odd/blob/main/run.sh?plain=1#L1'])
     assert.equal(source.parseGithubUrl(u).url, 'https://github.com/qa-local/odd', u);
   assert.match((await p[3].post('/api/submission/repo', { repo_url: 'https://github.com/qa-local' })).data.error, /profile, not a repository/);
+  assert.equal(source.parseGithubUrl('ssh://git@github.com:22/qa-local/odd.git').url, 'https://github.com/qa-local/odd');
+  // The repo's own .gitattributes can't hide files from judges or rewrite their text
+  const at = await source.snapshotRepo(teamB.id, 'https://github.com/qa-local/attrs');
+  assert.equal(at.files, 3);
+  assert.equal(fs.readFileSync(path.join(DATA, 'source', `team-${teamB.id}`, 'repo', 'ver.txt'), 'utf8'), '$Format:%H$\n');
   const r = ok(await p[3].post('/api/submission/repo', { repo_url: 'git@github.com:qa-local/odd.git' }));
   assert.equal(r.submission.repo_url, 'https://github.com/qa-local/odd');
   const why = Object.fromEntries(r.skipped.map((x) => [x.path, x.why]));

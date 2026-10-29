@@ -43,7 +43,7 @@ async function listPage() {
         h('aside', { class: 'stack sticky' }, rubricCard(d))));
   };
   let lastDraw = Date.now(), waiting = true;
-  const draw2 = async () => { lastDraw = Date.now(); await draw(); waiting = !!root.querySelector('[title^="Submissions open to judges"]'); };
+  const draw2 = async () => { lastDraw = Date.now(); try { await draw(); } catch { return; } waiting = !!root.querySelector('[title^="Submissions open to judges"]'); };
   await draw2();
   on('event:update', draw2);
   // Teams freeze on the clock (some with extensions): refresh while any is still building.
@@ -66,7 +66,7 @@ async function scorecardPage(teamId) {
   catch (e) {
     if (e.status !== 403 && e.status !== 404) throw e;
     // "Still building": try again by itself after the freeze (every 15 s while it's still closed).
-    let retried = false;
+    let retried = e.status !== 403; // a missing team won't appear by waiting
     const again = () => { if (retried || Date.now() - lastScoreRetry < 15000) return; retried = true; lastScoreRetry = Date.now(); route(); };
     on('tick', (t) => { if (t >= freezeAt() + 2000) again(); });
     on('event:update', again);

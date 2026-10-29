@@ -95,7 +95,7 @@ export async function render(rt) {
       conflictBar.hidden = false;
       clear(conflictBar, h('span', null, `⚠ ${f.conflict.by || 'A teammate'} saved a newer version of ${f.path} while you were editing.`),
         h('button', { class: 'btn sm secondary', onclick: () => { applyRemote(f, f.conflict.content, f.conflict.version); f.conflict = null; drawBar(); drawFiles(); } }, 'Load theirs'),
-        h('button', { class: 'btn sm', onclick: () => { const c = f.conflict; f.conflict = null; f.version = c.version; save(f, true); } }, 'Keep mine'));
+        canWrite ? h('button', { class: 'btn sm', onclick: () => { const c = f.conflict; f.conflict = null; f.version = c.version; save(f, true); } }, 'Keep mine') : null);
     } else conflictBar.hidden = true;
   }
   function drawRun() {
@@ -126,7 +126,7 @@ export async function render(rt) {
   // ---- saving / sync ----
   // Save 1.2 s after typing stops, but never wait more than 4 s while there are unsaved changes:
   // someone typing steadily (or right up to the freeze) still gets saved.
-  let offline = false;
+  let offline = false, lateUntil = 0;
   function scheduleSave(f, delay) {
     drawBar();
     if (!canWrite || f.gone) return;
@@ -143,8 +143,8 @@ export async function render(rt) {
     let retry = 0;
     try {
       const r = await api.put(`/api/workspace/${teamId}/file`, { path: f.path, content, baseVersion: f.version, force });
-      if (r.conflict) { f.conflict = { content: r.current.content, version: r.current.version, by: r.current.updated_by }; }
-      else { f.version = r.file.version; f.saved = content; }
+      if (r.conflict) { if (!(f.lateFlushed && !canWrite)) f.conflict = { content: r.current.content, version: r.current.version, by: r.current.updated_by }; }
+      else if (r.file.version > f.version) { f.version = r.file.version; f.saved = content; } // a later save may already have landed
       if (offline) { offline = false; toast('Back online: your changes are saved.', 'ok'); }
       f.backoff = 0;
     } catch (e) {
@@ -152,7 +152,7 @@ export async function render(rt) {
         if (!offline) { offline = true; toast('Can’t reach the server. Your edits are kept here and will save when the connection is back.', 'bad', 8000); }
         f.backoff = Math.min((f.backoff || 1500) * 2, 15000); retry = f.backoff;
       } else if (e.status === 409) { f.gone = true; if (files.get(f.path) === f) toast(`${f.path}: ${e.message}`, 'bad', 12000); }
-      else {
+      else if (!(e.status === 403 && !canWrite && f.lateFlushed)) { // (the freeze save already carried this text)
         toast(e.message, 'bad');
         if (e.status === 403) { canWrite = false; editor.updateOptions({ readOnly: true }); }
       }
@@ -160,7 +160,10 @@ export async function render(rt) {
     f.saving = false;
     if (left || files.get(f.path) !== f) return; // page closed, or the file was renamed/deleted meanwhile
     drawBar(); drawFiles();
-    if (dirty(f) && !f.conflict) scheduleSave(f, retry || undefined);
+    if (dirty(f) && !f.conflict) {
+      if (canWrite) scheduleSave(f, retry || undefined);
+      else if (Date.now() < lateUntil && !f.lateFlushed) save(f, false, true); // typed while the last save was on its way
+    }
   }
   function applyRemote(f, content, version) {
     const pos = editor.getModel() === f.model ? editor.getPosition() : null;
@@ -174,12 +177,13 @@ export async function render(rt) {
     if (ev.teamId !== teamId || (ev.by && ev.by.id === state.me.id && !ev.renamed && !ev.deleted)) return;
     if (ev.deleted) {
       const f = files.get(ev.path);
-      if (f && dirty(f)) {
+      const mineEv = ev.by && ev.by.id === state.me.id;
+      if (f && dirty(f) && !mineEv) {
         navigator.clipboard?.writeText(f.model.getValue()).catch(() => {});
         toast(`${ev.by.name} deleted ${ev.path} while you had unsaved edits. Your text was copied to the clipboard (if the browser allowed it).`, 'bad', 12000);
       }
       if (f) { clearTimeout(f.timer); f.model.dispose(); files.delete(ev.path); if (current === ev.path) { current = [...files.keys()][0] || null; editor.setModel(current ? files.get(current).model : null); } }
-      toast(`${ev.by.name} deleted ${ev.path}`);
+      if (!mineEv) toast(`${ev.by.name} deleted ${ev.path}`);
     } else if (ev.renamed) {
       const f = files.get(ev.from);
       if (f && !files.has(ev.path)) {
@@ -187,7 +191,7 @@ export async function render(rt) {
         files.delete(ev.from);
         const nf = mk(ev.path, f.model.getValue(), f.version + 1);
         nf.saved = f.saved;
-        if (current === ev.from) { current = ev.path; editor.setModel(nf.model); }
+        if (current === ev.from) { const pos = editor.getPosition(); current = ev.path; editor.setModel(nf.model); if (pos) editor.setPosition(pos); if (ev.by && ev.by.id === state.me.id) editor.focus(); }
         f.model.dispose();
         if (dirty(nf)) { toast(`${ev.by.name} renamed ${ev.from} to ${ev.path}. Your unsaved edits moved with it.`, '', 8000); scheduleSave(nf); }
       }
@@ -202,7 +206,7 @@ export async function render(rt) {
     }
     drawFiles(); drawBar(); drawRun();
   });
-  on('presence', (p) => { presence.set(p.user.id, { id: p.user.id, name: p.user.name, path: p.path, at: Date.now() }); drawFiles(); });
+  on('presence', (p) => { if (p.teamId !== undefined && p.teamId !== teamId) return; presence.set(p.user.id, { id: p.user.id, name: p.user.name, path: p.path, at: Date.now() }); drawFiles(); });
   const sendPresence = () => { if (state.socket) state.socket.emit('presence', { teamId, path: current || '' }); };
   const pt = setInterval(sendPresence, 20000);
   onLeave(() => { clearInterval(pt); if (state.socket) state.socket.emit('presence', { teamId, path: '' }); });
@@ -234,17 +238,37 @@ export async function render(rt) {
   // Freeze happens on the clock; flip to read-only when it passes. freezeAt() follows extensions
   // (it is refreshed on team/event updates), so an extension keeps or re-opens the workspace.
   const member = mine && role() === 'participant';
-  let reopening = false;
+  let reopening = false, freezeTimer = null;
+  const fzAtRender = freezeAt();
+  // At the freeze: send every unsaved file right away, even if a save is already on its way (this one
+  // carries the newest text), then make the editor read-only.
+  function lateSave(f) {
+    const content = f.model.getValue();
+    f.lateFlushed = true;
+    api.put(`/api/workspace/${teamId}/file`, { path: f.path, content, baseVersion: f.version, force: true })
+      .then((r) => { if (r.file && r.file.version > f.version) { f.version = r.file.version; f.saved = content; } if (!left) { drawBar(); drawFiles(); } })
+      .catch((e) => toast(`${f.path} was not saved at the freeze: ${e.message}`, 'bad', 12000));
+  }
+  function freezeNow() {
+    clearTimeout(freezeTimer); freezeTimer = null;
+    if (!canWrite || left) return;
+    lateUntil = Date.now() + 4000;
+    for (const f of files.values()) { clearTimeout(f.timer); if (dirty(f) && !f.conflict && !f.gone) lateSave(f); }
+    canWrite = false; editor.updateOptions({ readOnly: true });
+    tools.hidden = true; saveTop.hidden = true; modeNote.textContent = 'Frozen at build freeze';
+    drawBar(); toast('Build freeze: the workspace is now read-only.', 'bad', 10000);
+  }
+  onLeave(() => clearTimeout(freezeTimer));
   on('tick', (t) => {
     if (!member) return;
     const fz = freezeAt();
     const open_ = t < fz;
     // The last seconds before the freeze: save whatever is unsaved right away.
     if (canWrite && open_ && fz - t < 3500) for (const f of files.values()) if (dirty(f) && !f.saving && !f.conflict) save(f);
-    if (canWrite && !open_) {
-      for (const f of files.values()) if (dirty(f) && !f.conflict) save(f, false, true); // the server accepts these for a few seconds
-      canWrite = false; editor.updateOptions({ readOnly: true }); drawBar(); toast('Build freeze: the workspace is now read-only.', 'bad', 10000);
-    } else if (!canWrite && open_ && !reopening) {
+    // Lock at the exact moment, not up to a second late on the next tick.
+    if (canWrite && open_ && fz - t < 1500) { clearTimeout(freezeTimer); freezeTimer = setTimeout(freezeNow, Math.max(0, fz - t)); }
+    if (canWrite && !open_) freezeNow();
+    else if (!canWrite && open_ && fz > fzAtRender && !reopening) { // only a real extension re-opens it
       reopening = true;
       toast('Your team got more time: the workspace is open again.', 'ok', 8000);
       route(); // redraw with the editing tools
@@ -257,8 +281,9 @@ export async function render(rt) {
   async function newFile() {
     const p = await promptBox('New file', 'File path (folders allowed)', '', { placeholder: 'e.g. app.py or src/utils.js' });
     if (!p) return;
+    if (files.has(p.trim())) { open(p.trim()); return toast(`${p.trim()} already exists.`, 'bad'); }
     try {
-      const r = await api.put(`/api/workspace/${teamId}/file`, { path: p.trim(), content: '' });
+      const r = await api.put(`/api/workspace/${teamId}/file`, { path: p.trim(), content: '', create: 'only' });
       if (!files.has(r.file.path)) mk(r.file.path, '', r.file.version);
       open(r.file.path);
     } catch (e) { toast(e.message, 'bad'); }
@@ -268,28 +293,34 @@ export async function render(rt) {
     const to = await promptBox('Rename file', 'New path', current);
     if (!to || to === current) return;
     const f = files.get(current);
+    for (let i = 0; f.saving && i < 100; i++) await new Promise((r) => setTimeout(r, 100)); // let a save on its way finish
     await save(f);
     try {
       const from = current, dest = to.trim();
       await api.post(`/api/workspace/${teamId}/rename`, { from, to: dest });
       // Our own "renamed" event can arrive before this reply and has already moved the file.
-      if (files.has(dest) || !files.has(from) || files.get(from) !== f) { if (files.has(dest)) open(dest); return; }
+      if (files.has(dest) || !files.has(from) || files.get(from) !== f) { if (files.has(dest) && current !== dest) open(dest); else editor.focus(); return; }
+      const pos = editor.getPosition(); // keep the cursor where it was
       clearTimeout(f.timer);
       files.delete(from);
       const nf = mk(dest, f.model.getValue(), f.version + 1);
       nf.saved = f.saved;
       f.model.dispose();
       open(dest);
+      if (pos) { editor.setPosition(pos); editor.revealPositionInCenterIfOutsideViewport(pos); }
       if (dirty(nf)) scheduleSave(nf);
     } catch (e) { toast(e.message, 'bad'); }
   }
   async function deleteFile() {
     if (!current || !(await confirmBox('Delete file?', `Delete ${current} for the whole team? This cannot be undone.`, 'Delete', true))) return;
+    const p = current, f = files.get(p);
     try {
-      await api.del(`/api/workspace/${teamId}/file?path=${encodeURIComponent(current)}`);
-      const f = files.get(current); clearTimeout(f.timer); files.delete(current); f.model.dispose();
-      current = [...files.keys()][0] || null;
-      editor.setModel(current ? files.get(current).model : null);
+      await api.del(`/api/workspace/${teamId}/file?path=${encodeURIComponent(p)}`);
+      // Our own "deleted" event may already have removed it: only touch this exact file.
+      if (files.get(p) === f) {
+        clearTimeout(f.timer); files.delete(p); f.model.dispose();
+        if (current === p) { current = [...files.keys()][0] || null; editor.setModel(current ? files.get(current).model : null); }
+      }
       drawFiles(); drawBar(); drawRun();
     } catch (e) { toast(e.message, 'bad'); }
   }
@@ -299,8 +330,10 @@ export async function render(rt) {
       let text = await file.text();
       if (/\.sh$/i.test(file.name)) text = text.replace(/\r\n/g, '\n'); // bash in the sandbox needs LF
       if (text.includes('\u0000')) { toast(`${file.name} looks binary; skipped.`, 'bad'); continue; }
+      const had = files.get(file.name);
+      if (had && !(await confirmBox(`Replace ${file.name}?`, `The team already has ${file.name}. Replace it with the file from your computer for everyone?`, 'Replace', true))) continue;
       try {
-        const r = await api.put(`/api/workspace/${teamId}/file`, { path: file.name, content: text });
+        const r = await api.put(`/api/workspace/${teamId}/file`, { path: file.name, content: text, ...(had ? { baseVersion: had.version, force: true } : { create: 'only' }) });
         const ex = files.get(r.file.path);
         if (ex) applyRemote(ex, text, r.file.version); else mk(r.file.path, text, r.file.version);
         current = r.file.path;
@@ -330,21 +363,25 @@ export async function render(rt) {
   }
 
   drawFiles(); drawBar(); drawRun(); sendPresence();
+  // Editing tools (hidden when the workspace turns read-only at the freeze).
+  const modeNote = h('div', { class: 'faint', style: { margin: '2px 0 8px' } }, canWrite ? 'Shared with your team · autosaves' : meta.frozen ? 'Frozen at build freeze' : 'Read-only');
+  const tools = h('div', { class: 'row', style: { gap: '4px' }, hidden: !canWrite },
+    h('button', { class: 'btn sm', onclick: newFile }, '+ File'),
+    h('button', { class: 'btn secondary sm', onclick: () => importInput.click() }, 'Import'),
+    h('button', { class: 'btn ghost sm', onclick: renameFile, title: 'Rename current file' }, 'Rename'),
+    h('button', { class: 'btn ghost sm', onclick: deleteFile, title: 'Delete current file', 'aria-label': 'Delete current file' }, '🗑'), importInput);
+  const saveTop = h('button', { class: 'btn ghost sm', hidden: !canWrite, onclick: () => { const f = files.get(current); if (f) save(f, false); } }, 'Save');
 
   return h('div', { class: 'ws' },
     h('aside', { class: 'ws-files' },
       h('div', { class: 'head' },
         h('div', { class: 'row between' }, h('b', null, teamName), !mine ? badge(role() === 'admin' ? 'Admin view' : 'Read-only', 'gold') : null),
-        h('div', { class: 'faint', style: { margin: '2px 0 8px' } }, canWrite ? 'Shared with your team · autosaves' : meta.frozen ? 'Frozen at build freeze' : 'Read-only'),
-        canWrite ? h('div', { class: 'row', style: { gap: '4px' } },
-          h('button', { class: 'btn sm', onclick: newFile }, '+ File'),
-          h('button', { class: 'btn secondary sm', onclick: () => importInput.click() }, 'Import'),
-          h('button', { class: 'btn ghost sm', onclick: renameFile, title: 'Rename current file' }, 'Rename'),
-          h('button', { class: 'btn ghost sm', onclick: deleteFile, title: 'Delete current file', 'aria-label': 'Delete current file' }, '🗑'), importInput) : null),
+        modeNote,
+        tools),
       fileList,
       h('div', { class: 'faint', style: { padding: '10px 12px', borderTop: '1px solid var(--line)' } }, 'Big project? Keep it in GitHub and link the repo on the Submit page.')),
     h('section', { class: 'ws-editor' },
-      h('div', { class: 'ws-bar' }, pathLabel, saveState, h('span', { class: 'spacer' }), canWrite ? h('button', { class: 'btn ghost sm', onclick: () => { const f = files.get(current); if (f) save(f, false); } }, 'Save') : null),
+      h('div', { class: 'ws-bar' }, pathLabel, saveState, h('span', { class: 'spacer' }), saveTop),
       conflictBar, editorEl),
     h('aside', { class: 'ws-run' },
       h('div', { class: 'sec' },

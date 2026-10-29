@@ -9,6 +9,7 @@ const { get, all, run, audit, DATA_DIR } = require('../db');
 const A = require('../auth');
 const S = require('../settings');
 const source = require('../source');
+const { mp4Duration } = require('../media');
 const { canRead, teamOr404 } = require('./workspace');
 const { getCheckpoints } = require('./core');
 const { wrap, str, url, now, bus, HttpError } = require('../util');
@@ -73,8 +74,8 @@ function shapeSub(t, s, viewer) {
     repo_url: s.repo_url, repo_sha: s.repo_sha, repo_branch: s.repo_branch, repo_commit_date: s.repo_commit_date,
     repo_snapshot_at: s.repo_snapshot_at, repo_error: s.repo_error, repo_final: !!s.repo_final,
     // "Official" only when the freeze snapshot actually succeeded (taken at/after this team's freeze, no error).
-    repo_official: !!s.repo_final && !s.repo_error && !s.repo_after_freeze && !!s.repo_snapshot_at && Date.parse(s.repo_snapshot_at) >= S.freezeAt(t) - 1000,
-    repo_after_freeze: !!s.repo_after_freeze,
+    repo_official: !!s.repo_final && !!s.repo_pinned && !s.repo_error && !s.repo_after_freeze && !!s.repo_snapshot_at && Date.parse(s.repo_snapshot_at) >= S.freezeAt(t) - 1000,
+    repo_after_freeze: !!s.repo_after_freeze, repo_unpinned: !!s.repo_final && !!s.repo_sha && !s.repo_pinned,
     zip_name: s.zip_name, zip_at: s.zip_at, has_repo: source.hasSource(t.id, 'repo'), has_zip: source.hasSource(t.id, 'zip'),
     video_url: s.video_url, video_file: !!s.video_file, video_seconds: s.video_seconds,
     brief: JSON.parse(s.brief || '{}'), brief_file: s.brief_file ? path.extname(s.brief_file) : '',
@@ -154,6 +155,11 @@ function repoTakenBy(teamId, repoUrl) {
   // Only a working snapshot counts: a failed or not-yet-public link doesn't reserve the URL.
   return !!get("SELECT 1 FROM submissions WHERE team_id != ? AND lower(repo_url) = ? AND repo_sha != ''", teamId, key);
 }
+// The team's freeze moved (extension): forget retries and pins from the old freeze time.
+function resetFreezeSnapshot(teamId) {
+  finalTries.delete(teamId); finalRetryAt.delete(teamId); prefreezeSeen.delete(teamId);
+  run("UPDATE submissions SET repo_final = 0, repo_freeze_head = '', repo_prefreeze_head = '' WHERE team_id = ?", teamId);
+}
 async function doSnapshot(t, repoUrl, userId, final = false, useToken = false, { override = false } = {}) {
   if (cloning.has(t.id)) throw new HttpError(409, 'A snapshot is already in progress for this team.');
   const key = String(repoUrl).toLowerCase();
@@ -162,12 +168,18 @@ async function doSnapshot(t, repoUrl, userId, final = false, useToken = false, {
   cloning.add(t.id);
   if (!claimed.has(key)) claimed.set(key, t.id);
   try {
-    const cur0 = get('SELECT repo_freeze_head FROM submissions WHERE team_id = ?', t.id) || {};
-    const [pinUrl, pinSha] = String(cur0.repo_freeze_head || '').split(' ');
-    const pin = final && pinUrl && pinUrl.toLowerCase() === key ? pinSha : '';
-    const snap = await source.snapshotRepo(t.id, repoUrl, { useToken, before: final ? S.freezeAt(t) : 0, pin });
+    // The commit GitHub had at the freeze (recorded within seconds of it), or failing that the last
+    // one seen in the minutes before it. Without either, commit dates can't be verified.
+    const cur0 = get('SELECT repo_freeze_head, repo_prefreeze_head FROM submissions WHERE team_id = ?', t.id) || {};
+    const pinFor = (v) => { const [u, sha] = String(v || '').split(' '); return u && u.toLowerCase() === key ? sha : ''; };
+    const pin = final ? (pinFor(cur0.repo_freeze_head) || pinFor(cur0.repo_prefreeze_head)) : '';
+    const fz = S.freezeAt(t);
+    const snap = await source.snapshotRepo(t.id, repoUrl, { useToken, before: final ? fz : 0, pin });
+    // Staff may have given this team more time while it was cloning: then this is no longer the
+    // official snapshot (the sweep takes a new one at the new freeze).
+    if (final) { const t2 = get('SELECT * FROM teams WHERE id = ?', t.id); final = !!t2 && S.isFrozen(t2) && S.freezeAt(t2) === fz; }
     run(`UPDATE submissions SET repo_url = ?, repo_sha = ?, repo_branch = ?, repo_commit_date = ?, repo_snapshot_at = ?, repo_error = '',
-         repo_final = ?, repo_after_freeze = ?, updated_at = ? WHERE team_id = ?`, snap.url, snap.sha, snap.branch, snap.commitDate, now(), final ? 1 : 0, final && snap.afterFreeze ? 1 : 0, now(), t.id);
+         repo_final = ?, repo_after_freeze = ?, repo_pinned = ?, updated_at = ? WHERE team_id = ?`, snap.url, snap.sha, snap.branch, snap.commitDate, now(), final ? 1 : 0, final && snap.afterFreeze ? 1 : 0, final && snap.pinned ? 1 : 0, now(), t.id);
     const how = !final ? '' : snap.afterFreeze ? ' (no commit before the freeze; took the latest)' : ` (last commit before the freeze${snap.pinned ? ', from what GitHub had at the freeze' : ''})`;
     const sk = snap.skipped.length ? `; ${snap.skipped.length} left out: ${snap.skipped.slice(0, 5).map((x) => `${x.path} (${x.why})`).join('; ')}` : '';
     log(t.id, userId, final ? 'repo.final-snapshot' : 'repo.snapshot', `${snap.url}@${snap.sha}${how} · ${snap.files} files${sk}`.slice(0, 1000));
@@ -258,7 +270,9 @@ for (const [kind, spec] of Object.entries(UPLOADS)) {
     await fsp.mkdir(dir, { recursive: true });
     const name = `${kind}-${crypto.randomBytes(4).toString('hex')}${ext}`;
     // Unknown length (the browser couldn't read it) is stored as unknown, never the old file's length.
-    const secs = kind === 'video' && req.body.seconds ? Math.max(0, Math.min(36000, Number(req.body.seconds) || 0)) || null : null;
+    let secs = kind === 'video' && req.body.seconds ? Math.max(0, Math.min(36000, Number(req.body.seconds) || 0)) || null : null;
+    // MP4/MOV: read the length from the file itself (works for iPhone HEVC, and can't be misreported).
+    if (kind === 'video' && ext !== '.webm') secs = (await mp4Duration(req.file.path)) ?? secs;
     // Teammates uploading at once: one at a time, the last one wins, and every older copy is removed.
     await source.withLock(`up:${kind}:${t.id}`, async () => {
       try { await fsp.rename(req.file.path, path.join(dir, name)); }
@@ -336,37 +350,59 @@ r.get('/submissions/:teamId/log', wrap((req) => {
 
 // ---------- build-freeze sweep: take the official repo snapshot when each team freezes ----------
 const finalizing = new Set(), pinning = new Set();
-const finalTries = new Map(), finalRetryAt = new Map();
-async function freezeSweep() {
-  // First, note what each frozen team's repository points at on GitHub right now (quick, in parallel).
-  // The official snapshot is taken from that commit's history even if it's cloned minutes later.
-  const pinnedTo = (s) => { const gh = source.parseGithubUrl(s.repo_url); return gh && String(s.repo_freeze_head).toLowerCase().startsWith(`${gh.url.toLowerCase()} `); };
-  const unpinned = all("SELECT team_id, repo_url, repo_freeze_head FROM submissions WHERE repo_url != '' AND repo_final = 0")
-    .filter((s) => !pinnedTo(s)).map((s) => ({ ...s, t: get('SELECT * FROM teams WHERE id = ?', s.team_id) }))
-    .filter((s) => s.t && S.isFrozen(s.t) && !pinning.has(s.team_id));
-  await Promise.all(unpinned.map(async (s) => {
+const pinnedTo = (s, col) => { const gh = source.parseGithubUrl(s.repo_url); return !!gh && String(s[col] || '').toLowerCase().startsWith(`${gh.url.toLowerCase()} `); };
+const prefreezeSeen = new Map(); // team id -> when the pre-freeze head was last recorded
+// Every 2 s: record which commit each team's repo points at on GitHub (one quick ls-remote):
+// - right after the team's freeze (the pin the official snapshot is taken from), and
+// - once a minute in the 10 minutes before it (fallback if the repo is hidden at the freeze).
+async function pinSweep() {
+  const nowMs = Date.now();
+  const rows = all("SELECT s.team_id, s.repo_url, s.repo_final, s.repo_freeze_head, s.repo_prefreeze_head FROM submissions s WHERE s.repo_url != ''");
+  await Promise.all(rows.map(async (s) => {
+    if (pinning.has(s.team_id)) return;
+    const t = get('SELECT * FROM teams WHERE id = ?', s.team_id);
+    if (!t) return;
+    const fz = S.freezeAt(t);
+    const after = nowMs >= fz;
+    let col = null;
+    if (after && !s.repo_final && nowMs - fz < 120000 && !pinnedTo(s, 'repo_freeze_head')) col = 'repo_freeze_head';
+    else if (!after && fz - nowMs < 600000 && nowMs - (prefreezeSeen.get(s.team_id) || 0) > 60000) col = 'repo_prefreeze_head';
+    if (!col) return;
+    const gh = source.parseGithubUrl(s.repo_url);
+    if (!gh) return;
     pinning.add(s.team_id);
     try {
-      const gh = source.parseGithubUrl(s.repo_url);
-      const sha = gh ? await source.remoteHead(gh.url) : '';
-      if (sha) run('UPDATE submissions SET repo_freeze_head = ? WHERE team_id = ? AND repo_url = ?', `${gh.url} ${sha}`, s.team_id, s.repo_url);
+      const sha = await source.remoteHead(gh.url);
+      if (col === 'repo_prefreeze_head') prefreezeSeen.set(s.team_id, Date.now());
+      // Only store it if the team's freeze didn't move meanwhile (an extension resets the pins), and
+      // a pre-freeze reading only if it really was taken before the freeze.
+      const t2 = get('SELECT * FROM teams WHERE id = ?', s.team_id);
+      const still = t2 && S.freezeAt(t2) === fz && (col === 'repo_freeze_head' ? S.isFrozen(t2) : Date.now() < fz);
+      if (sha && still) run(`UPDATE submissions SET ${col} = ? WHERE team_id = ? AND repo_url = ? AND repo_final = 0`, `${gh.url} ${sha}`, s.team_id, s.repo_url);
     } finally { pinning.delete(s.team_id); }
   }));
+}
+const finalTries = new Map(), finalRetryAt = new Map();
+async function freezeSweep() {
   const due = all('SELECT * FROM teams').filter((t) => {
     if (!S.isFrozen(t) || finalizing.has(t.id) || cloning.has(t.id)) return false; // a running snapshot: next sweep
     if (Date.now() < (finalRetryAt.get(t.id) || 0)) return false;
-    const s = get('SELECT repo_url, repo_final FROM submissions WHERE team_id = ?', t.id);
-    return s && s.repo_url && !s.repo_final;
+    const s = get('SELECT repo_url, repo_final, repo_freeze_head FROM submissions WHERE team_id = ?', t.id);
+    if (!s || !s.repo_url || s.repo_final) return false;
+    // Give the pin a few seconds to be recorded before cloning (it is taken every 2 s).
+    return pinnedTo(s, 'repo_freeze_head') || Date.now() - S.freezeAt(t) > 20000;
   });
   // All teams freeze at once, so clone in parallel (a few at a time) rather than one by one.
   const one = async (t) => {
-    const s = get('SELECT repo_url FROM submissions WHERE team_id = ?', t.id);
     finalizing.add(t.id);
     try {
+      const s = get('SELECT repo_url FROM submissions WHERE team_id = ?', t.id);
+      if (!s || !s.repo_url || !get('SELECT id FROM teams WHERE id = ?', t.id)) return; // removed meanwhile
       await doSnapshot(t, s.repo_url, null, true);
       console.log(`[freeze] final snapshot taken for team ${t.name}`);
       finalTries.delete(t.id); finalRetryAt.delete(t.id);
     } catch (e) {
+      if (e.status === 409) { finalRetryAt.set(t.id, Date.now() + 10000); return; } // staff snapshot running: not a failed try
       // Wi-Fi blips happen at 4:30: try three times, 30 s then 90 s apart, then leave it to staff.
       const n = (finalTries.get(t.id) || 0) + 1;
       finalTries.set(t.id, n);
@@ -391,4 +427,4 @@ async function adminSnapshot(teamId, userId, { useToken = false } = {}) {
   changed(t);
 }
 
-module.exports = { router: r, completeness, subRow, freezeSweep, adminSnapshot, BRIEF_FIELDS, DISCLOSURE_FIELDS, shapeSub };
+module.exports = { router: r, completeness, subRow, freezeSweep, pinSweep, adminSnapshot, resetFreezeSnapshot, BRIEF_FIELDS, DISCLOSURE_FIELDS, shapeSub };
