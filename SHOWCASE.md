@@ -4,6 +4,7 @@
 1. Double-click `demo.bat`. Open http://localhost:3100.
 2. Open two browser windows side by side: a normal one and a private/incognito one (so two people can be signed in at once).
 3. All passwords: `demo-pass-2026`.
+4. Start at the **1:30 PM** stage (Admin → Demo clock → **1:30 PM · Build Sprint 2**). Don't open with 8:40 AM: the sample teams were made at 1:30 PM, so at 8:40 AM they already show both checkpoints done.
 
 | Who | Email |
 |---|---|
@@ -36,3 +37,12 @@ To reset the demo completely, close the window and delete the `data-demo` folder
 - Admin → Scoring & awards: the tabulation updates (3 judges now), tie-break rules, flags. **Mark top 3 as finalists**, assign awards (one prize per team), tick **Results published**: every screen gets a Results tab.
 
 Back to the start any time: Admin → Demo clock → **1:30 PM · Build Sprint 2**.
+
+**If something goes wrong**
+
+| What you see | What to say | What to do |
+|---|---|---|
+| Code → **Run** says "Runner unavailable: Docker is not running…" | "On event day the code runs in a locked-down sandbox (no internet, memory and time limits). This laptop doesn't have it installed, so I'll show a finished project instead." | As admin: Demo clock → **5:15 PM · Primary judging**. Then sign in as judge1@demo.com → Judging → **Score** Phish Finders (or RoomRadar): title, prototype link, video, brief and disclosures are all filled in. (Before 5:15 PM the judge page only offers a preview.) |
+| Demo clock click does nothing, or the time/banner didn't change | "One second, I'll jump the clock again." | Click the same stage button again and reload the page (F5). Still stuck: close the demo.bat window, delete the `data-demo` folder, double-click `demo.bat`, sign in again. It opens at 1:30 PM. |
+| A page is blank, frozen, or shows an error | "Let me restart the demo." | Close the demo.bat window and double-click `demo.bat` again (your demo data stays), then reload the browser. Only if it's still broken: delete `data-demo` too. |
+| You landed on 8:40 AM and teams show both checkpoints done | "That's sample data made later in the day." | Admin → Demo clock → **1:30 PM · Build Sprint 2** and carry on. |

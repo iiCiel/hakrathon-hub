@@ -8,3 +8,4 @@ data-demo/
 *.db-*
 *.log
 .shots/
+*.bak-*
