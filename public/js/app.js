@@ -8,6 +8,7 @@ export const now = () => Date.now() + state.offset;
 const pages = {};
 export function page(name, loader) { pages[name] = loader; }
 page('login', () => import('./pages/login.js'));
+page('register', () => import('./pages/register.js'));
 page('home', () => import('./pages/home.js'));
 page('team', () => import('./pages/team.js'));
 page('teams', () => import('./pages/teams.js'));
@@ -72,6 +73,7 @@ export function renderChrome() {
       h('span', { class: 'name' }, (state.event ? state.event.event_name : 'HAkrathon 2026').replace(/(\d{4})$/, ''), h('span', { class: 'year' }, ((state.event ? state.event.event_name : '2026').match(/\d{4}$/) || [''])[0]))),
     h('nav', { class: 'nav', 'aria-label': 'Main' }, items.map(([href, label, name]) =>
       h('a', { href, class: cur === name ? 'active' : '', 'aria-current': cur === name ? 'page' : null }, label, name === 'chat' && unread ? [h('span', { class: 'dot', title: 'New messages', 'aria-hidden': 'true' }), h('span', { class: 'sr' }, ' (new messages)')] : null))),
+    user ? h('button', { class: 'meal-pill', id: 'meal-pill', type: 'button', hidden: true, onclick: showMeal }) : null,
     user ? h('div', { class: 'clock-pill', id: 'clock-pill', 'aria-live': 'off' }) : null,
     user ? h('div', { class: 'userbox' },
       h('button', { class: 'menu-btn', 'aria-label': 'Account menu', 'aria-expanded': String(menuOpen), 'aria-controls': 'account-menu', onclick: (e) => {
@@ -118,7 +120,54 @@ function nextMoment() {
   const nextSched = sched.filter(([ts]) => ts > t).sort((a, b) => a[0] - b[0])[0];
   return next || nextSched || null;
 }
+// ---------- food reminder (top right) ----------
+// The meal being served now, or the next one within 12 hours.
+function mealNow() {
+  const meals = (state.event && state.event.meals) || [];
+  const t = now();
+  const live = meals.find((m) => t >= Date.parse(m.start) && t < Date.parse(m.end));
+  if (live) return { m: live, live: true };
+  const next = meals.filter((m) => Date.parse(m.start) > t).sort((a, b) => Date.parse(a.start) - Date.parse(b.start))[0];
+  return next && Date.parse(next.start) - t < 12 * 3600000 ? { m: next, live: false } : null;
+}
+function mealToast(m, live) {
+  toast(h('div', null, h('b', null, live ? `🍽 ${m.title} is being served now` : `🍽 ${m.title} at ${fmtTime(m.start)}`), m.detail ? h('div', null, m.detail) : null), 'meal', 12000);
+}
+function showMeal() { const x = mealNow(); if (x) mealToast(x.m, x.live); }
+function tickMeal() {
+  const el = document.getElementById('meal-pill');
+  if (!el) return;
+  const x = mealNow();
+  if (!x) { el.hidden = true; return; }
+  const left = Date.parse(x.m.start) - now();
+  const soon = !x.live && left <= 15 * 60000;
+  const mins = Math.max(1, Math.ceil(left / 60000));
+  const at = fmtTime(x.m.start);
+  const label = x.live ? `${x.m.title} now` : soon ? `${x.m.title} in ${mins} min` : `${x.m.title} ${at}`;
+  const short = x.live ? 'Now' : soon ? `${mins}m` : at.replace(/\s?[AP]M$/i, '');
+  const key = `${label}|${short}`;
+  if (el.dataset.key !== key) {
+    el.dataset.key = key;
+    clear(el, h('span', { class: 'ico', 'aria-hidden': 'true' }, '🍽'), h('span', { class: 'lbl' }, label), h('span', { class: 'lbl-s', 'aria-hidden': 'true' }, short));
+    const said = x.live ? `${x.m.title} is being served now.` : `Next meal: ${x.m.title} at ${at}.`;
+    el.setAttribute('aria-label', `${said}${x.m.detail ? ` ${x.m.detail}` : ''}`);
+    el.title = `${said}${x.m.detail ? `\n${x.m.detail}` : ''}`;
+  }
+  el.hidden = false;
+  el.classList.toggle('live', x.live);
+  el.classList.toggle('soon', soon);
+  // One pop-up 10 minutes before and one when it starts, once per meal on this browser.
+  const phase = x.live ? 'start' : left <= 10 * 60000 ? 'soon' : '';
+  if (!phase || !state.me) return;
+  const seen = `hak:meal:${state.me.id}:${x.m.start}:${phase}`;
+  try { if (localStorage.getItem(seen)) return; localStorage.setItem(seen, '1'); } catch { if (mealShown.has(seen)) return; }
+  mealShown.add(seen);
+  mealToast(x.m, x.live);
+}
+const mealShown = new Set();
+
 function tickClock() {
+  tickMeal();
   const pill = document.getElementById('clock-pill');
   if (!pill) return;
   const n = nextMoment();
@@ -221,7 +270,7 @@ export function currentRoute() {
   const raw = location.hash.replace(/^#\/?/, '');
   const [pathPart, query = ''] = raw.split('?');
   const parts = pathPart.split('/').filter(Boolean).map(decodeURIComponent);
-  const map = { '': 'home', team: 'team', teams: 'teams', workspace: 'workspace', chat: 'chat', help: 'help', submit: 'submit', judge: 'judge', review: 'review', admin: 'admin', results: 'results', profile: 'profile', login: 'login' };
+  const map = { '': 'home', team: 'team', teams: 'teams', workspace: 'workspace', chat: 'chat', help: 'help', submit: 'submit', judge: 'judge', review: 'review', admin: 'admin', results: 'results', profile: 'profile', login: 'login', register: 'register' };
   return { name: map[parts[0] || ''] || 'home', params: parts.slice(1), query: new URLSearchParams(query) };
 }
 export function go(hash) { if (location.hash === hash) route(); else location.hash = hash; }
@@ -241,7 +290,7 @@ export async function route() {
 async function routeInner(seq, prev) {
   const r = currentRoute();
   const main = document.getElementById('main');
-  if (!state.me && r.name !== 'login') { location.hash = '#/login'; return; }
+  if (!state.me && r.name !== 'login' && r.name !== 'register') { location.hash = '#/login'; return; }
   if (state.me && r.name === 'login') { location.hash = '#/'; return; }
   main.className = ['chat', 'workspace', 'login'].includes(r.name) ? 'full' : '';
   clear(main, h('div', { class: 'loading' }, h('span', { class: 'spinner' }), ' Loading…'));

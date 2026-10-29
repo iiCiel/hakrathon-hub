@@ -19,6 +19,7 @@ const TIME_COLUMNS = {
   help_requests: ['created_at', 'claimed_at', 'resolved_at'], files: ['updated_at'], runs: ['created_at'],
   checkpoints: ['submitted_at', 'updated_at'], submissions: ['repo_snapshot_at', 'zip_at', 'updated_at'],
   submission_log: ['created_at'], validations: ['updated_at'], scores: ['updated_at'], audit: ['created_at'],
+  registrations: ['created_at', 'updated_at', 'checked_in_at'],
 };
 
 function jump(stageId, nowMs = Date.now()) {
@@ -43,6 +44,7 @@ function jump(stageId, nowMs = Date.now()) {
       roster_lock_at: mv(s.roster_lock_at), cp1_at: mv(s.cp1_at), cp2_at: mv(s.cp2_at), upload_open_at: mv(s.upload_open_at),
       build_freeze_at: mv(s.build_freeze_at), validation_end_at: mv(s.validation_end_at),
       schedule: s.schedule.map((x) => ({ ...x, start: mv(x.start), end: mv(x.end) })),
+      meals: (s.meals || []).map((x) => ({ ...x, start: mv(x.start), end: mv(x.end) })),
       demo_shift_ms: newShift,
       judging_open: stage.judging, ...(stage.judging ? {} : { finalists_open: false, results_published: false }),
     });

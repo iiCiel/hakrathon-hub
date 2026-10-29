@@ -79,6 +79,23 @@ test('demo shows event-day times and the demo clock moves everything together', 
   assert.equal((await req('POST', '/api/admin/demo-clock', { stage: 'nope' })).status >= 400, true);
 });
 
+test('demo: meals follow the demo clock; sample registrations and check-ins are there', async () => {
+  assert.equal((await req('POST', '/api/auth/login', { email: 'admin@demo.uakron.edu', password: 'demo-pass-2026' })).status, 200);
+  for (const stage of ['morning', 'awards', 'sprint']) {
+    assert.equal((await req('POST', '/api/admin/demo-clock', { stage })).status, 200);
+    const me = (await req('GET', '/api/me')).data;
+    assert.deepEqual(me.event.meals.map((m) => `${m.title} ${eventHM(m.start, me.event.demo_shift_ms)}`), ['Breakfast 07:30', 'Lunch 12:00', 'Dinner 16:30'], stage);
+  }
+  const d = (await req('GET', '/api/admin/registrations')).data;
+  assert.equal(d.summary.checked_in, 9);
+  assert.ok(d.summary.pending >= 1 && d.summary.waitlist >= 1);
+  const me = (await req('GET', '/api/me')).data;
+  for (const x of d.registrations.filter((y) => y.checked_in_at)) {
+    const hm = eventHM(x.checked_in_at, me.event.demo_shift_ms);
+    assert.ok(hm >= '07:30' && hm <= '08:15', `checked in at ${hm}`);
+  }
+});
+
 test('server-made text (Rehearsal, offline package) shows event-day times in the demo', async () => {
   assert.equal((await req('POST', '/api/auth/login', { email: 'admin@demo.uakron.edu', password: 'demo-pass-2026' })).status, 200);
   for (const stage of ['sprint', 'judging']) {

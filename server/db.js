@@ -185,6 +185,32 @@ CREATE TABLE IF NOT EXISTS awards (
   team_id INTEGER REFERENCES teams(id) ON DELETE SET NULL,
   rationale TEXT DEFAULT ''
 );
+CREATE TABLE IF NOT EXISTS registrations (
+  id INTEGER PRIMARY KEY,
+  email TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  name TEXT NOT NULL,
+  major TEXT DEFAULT '',
+  class_level TEXT DEFAULT '',
+  team_mode TEXT NOT NULL DEFAULT 'match',
+  team_name TEXT DEFAULT '',
+  teammates TEXT DEFAULT '',
+  lane TEXT DEFAULT '',
+  preferred_role TEXT DEFAULT '',
+  skills TEXT DEFAULT '',
+  experience TEXT DEFAULT '',
+  technical INTEGER NOT NULL DEFAULT 0,
+  dietary TEXT DEFAULT '',
+  accommodations TEXT DEFAULT '',
+  media_ok INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'pending',
+  staff_note TEXT DEFAULT '',
+  invite_code TEXT DEFAULT '',
+  checked_in_at TEXT DEFAULT '',
+  checked_in_by INTEGER,
+  id_checked INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  updated_at TEXT DEFAULT ''
+);
 CREATE TABLE IF NOT EXISTS audit (
   id INTEGER PRIMARY KEY,
   user_id INTEGER,

@@ -1,7 +1,8 @@
 # Hosted copy of the DEMO only (sample teams, red DEMO banner), for showing the portal to people
 # who aren't at this laptop. Never the real event: that runs on the laptop with start.bat.
 # Free plan: it sleeps after 15 idle minutes and starts fresh (new sample data) when it wakes.
-# Code running is off here (no Docker on the host).
+# The Docker code runner is off here (no Docker on the host); Python and JavaScript run in each
+# visitor's browser instead.
 services:
   - type: web
     name: hakrathon-demo
@@ -19,5 +20,7 @@ services:
         value: /tmp/hak-demo
       - key: RUNNER
         value: "off"
+      - key: TRUST_PROXY
+        value: "1"
       - key: DEMO_PASSWORD
         sync: false

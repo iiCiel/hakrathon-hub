@@ -34,7 +34,7 @@ function publicSettings() {
     global_extension_minutes: s.global_extension_minutes, validation_end_at: s.validation_end_at,
     judging_open: !!s.judging_open, finalists_open: !!s.finalists_open, results_published: !!s.results_published,
     registration_open: !!s.registration_open, max_teams: s.max_teams, team_min: s.team_min, team_max: s.team_max,
-    max_video_seconds: s.max_video_seconds, lanes: s.lanes, criteria: s.criteria, awards: s.awards, schedule: s.schedule,
+    max_video_seconds: s.max_video_seconds, lanes: s.lanes, criteria: s.criteria, awards: s.awards, schedule: s.schedule, meals: s.meals || [],
     runner_enabled: !!s.runner_enabled, is_demo: !!s.is_demo, demo_shift_ms: s.is_demo ? Number(s.demo_shift_ms) || 0 : 0,
   };
 }
@@ -69,9 +69,13 @@ r.post('/auth/register', wrap(async (req, res) => {
     if (!emailAllowed(email, inv.role)) throw new HttpError(400, `Participants must use a University of Akron email (${S.getSettings().participant_email_domains}).`);
     if (get('SELECT id FROM users WHERE email = ?', email)) throw new HttpError(409, 'An account with that email already exists. Sign in instead.');
     run('UPDATE invites SET uses = uses + 1 WHERE code = ?', inviteCode);
-    const info = run(`INSERT INTO users (email, name, password_hash, role, major, class_level, skills, preferred_role, agreed_rules)
-      VALUES (?,?,?,?,?,?,?,?,1)`, email, name, passwordHash, inv.role,
-      str(b.major, { max: 80 }), str(b.class_level, { max: 40 }), str(b.skills, { max: 500 }), str(b.preferred_role, { max: 80 }));
+    // Someone who registered for the event: fill in what they told us there, and carry over check-in.
+    const reg = inv.role === 'participant' ? get('SELECT * FROM registrations WHERE email = ?', email) : null;
+    const pick = (v, max, fallback) => str(v, { max }) || (reg ? String(fallback || '').slice(0, max) : '');
+    const info = run(`INSERT INTO users (email, name, password_hash, role, major, class_level, skills, preferred_role, agreed_rules, checked_in)
+      VALUES (?,?,?,?,?,?,?,?,1,?)`, email, name, passwordHash, inv.role,
+      pick(b.major, 80, reg && reg.major), pick(b.class_level, 40, reg && reg.class_level), pick(b.skills, 500, reg && reg.skills), pick(b.preferred_role, 80, reg && reg.preferred_role),
+      reg && reg.checked_in_at ? 1 : 0);
     return get('SELECT * FROM users WHERE id = ?', Number(info.lastInsertRowid));
   });
   audit(user.id, 'register', { role: user.role, invite: inviteCode.slice(0, 5) + '…' });

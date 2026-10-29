@@ -1,9 +1,72 @@
-import { h, clear, toast, promptBox, confirmBox, initials, badge } from '../ui.js';
+import { h, clear, toast, promptBox, confirmBox, initials, badge, modal } from '../ui.js';
 import { api } from '../api.js';
 import { state, on, onLeave, role, go, freezeAt, route } from '../app.js';
 import { loadMonaco, monacoLang, darkMode } from '../monaco.js';
+import { browserCanRun, browserRun, warmPython } from '../browser-runner.js';
 
 const RUN_EXT = { py: 'python', js: 'javascript', mjs: 'javascript', c: 'c', cpp: 'cpp', cc: 'cpp', java: 'java', sh: 'bash' };
+
+// Starter programs for an empty workspace, so a team can press Run straight away.
+const SAMPLES = {
+  python: { label: 'Python sample', open: 'sample-python/main.py', files: {
+    'sample-python/main.py': `# Sample: a tiny walk-in queue. Press Run (or Ctrl+Enter).
+# Type names in "Program input" (one per line) to put your own people in the queue.
+from queue_model import Queue
+
+names = []
+while True:
+    try:
+        line = input()
+    except EOFError:
+        break
+    if line.strip():
+        names.append(line.strip())
+
+q = Queue()
+for name in names or ["Ava", "Ben", "Chloe"]:
+    q.join(name)
+
+print("Now serving:", q.next())
+print("Still waiting:", ", ".join(q.people) or "nobody")
+print("Estimated wait for the next person:", q.estimate(), "min")
+`,
+    'sample-python/queue_model.py': `class Queue:
+    AVG_MIN = 7  # minutes per person
+
+    def __init__(self):
+        self.people = []
+
+    def join(self, name):
+        self.people.append(name)
+
+    def next(self):
+        return self.people.pop(0) if self.people else None
+
+    def estimate(self):
+        return len(self.people) * self.AVG_MIN
+`,
+  } },
+  javascript: { label: 'JavaScript sample', open: 'sample-js/main.js', files: {
+    'sample-js/main.js': `// Sample: average study-room wait. Press Run (or Ctrl+Enter).
+// Type minutes in "Program input" (one per line) to use your own numbers.
+const { average } = require('./stats.js');
+const fs = require('fs');
+
+const input = fs.readFileSync(0, 'utf8').split('\n').map(Number).filter((n) => n > 0);
+const waits = input.length ? input : [12, 4, 9, 15, 3];
+
+console.log('Waits (min):', waits);
+console.log('Average wait:', average(waits).toFixed(1), 'min');
+console.log('Longest wait:', Math.max(...waits), 'min');
+`,
+    'sample-js/stats.js': `function average(list) {
+  return list.reduce((sum, n) => sum + n, 0) / list.length;
+}
+
+module.exports = { average };
+`,
+  } },
+};
 
 export async function render(rt) {
   const teamId = Number(rt.params[0]) || (state.team && state.team.id);
@@ -86,6 +149,25 @@ export async function render(rt) {
       h('span', { class: 'who' }, viewers.map((v) => h('i', { title: `${v.name} is here` }, initials(v.name)))));
     }));
     if (focusedPath) [...fileList.children].find((el) => el.dataset.path === focusedPath)?.focus();
+    if (!files.size) {
+      fileList.append(h('div', { class: 'ws-empty' },
+        h('p', null, canWrite ? 'No files yet. Start from a sample, or add your own with + File or Import.' : 'No files yet.'),
+        canWrite ? Object.entries(SAMPLES).map(([k, smp]) => h('button', { class: 'btn secondary sm', type: 'button', onclick: () => addSample(k) }, smp.label)) : null));
+    }
+  }
+  async function addSample(kind) {
+    const smp = SAMPLES[kind];
+    try {
+      for (const [p, content] of Object.entries(smp.files)) {
+        if (files.has(p)) continue;
+        try {
+          const r = await api.put(`/api/workspace/${teamId}/file`, { path: p, content, create: 'only' });
+          if (!files.has(r.file.path)) mk(r.file.path, content, r.file.version).saved = content;
+        } catch (e) { if (e.status !== 409) throw e; }
+      }
+      open(smp.open);
+      toast(`${smp.label} added in ${smp.open.split('/')[0]}/. Press Run to try it.`, 'ok');
+    } catch (e) { toast(e.message, 'bad'); }
   }
   function drawBar() {
     const f = current && files.get(current);
@@ -107,9 +189,20 @@ export async function render(rt) {
     const prev = entrySel.value;
     clear(entrySel, cands.length ? cands.map((p) => h('option', { value: p }, p)) : h('option', { value: '' }, `(no ${exts.join('/')} files)`));
     if (current && cands.includes(current)) entrySel.value = current; else if (cands.includes(prev)) entrySel.value = prev;
-    const st = state.runner;
-    runBtn.disabled = !cands.length;
-    runnerNote.textContent = st.ready ? 'Runs in an isolated sandbox: no internet, 10 s limit, 384 MB memory.' : `Runner unavailable: ${st.reason}`;
+    const m = runMode();
+    runBtn.disabled = !cands.length || m === 'none';
+    runnerNote.textContent = m === 'server' ? 'Runs in an isolated sandbox: no internet, 10 s limit, 384 MB memory.'
+      : m === 'browser' ? 'Runs in your browser in a locked-down sandbox (standard library only, 10 s limit), because the event code runner is off.'
+        : browserCanRun(L) ? 'Code running is paused by event staff.' : `${state.runner.langs[L].name} needs the event code runner, which is off right now. Python and JavaScript still run in your browser.`;
+    if (m === 'browser' && L === 'python') warmPython();
+  }
+  // server: the Docker sandbox. browser: Python/JavaScript in this browser when the sandbox is off.
+  function runMode() {
+    const L = langSel.value;
+    if (state.runner.ready) return 'server';
+    if (!browserCanRun(L)) return 'none';
+    if (state.event && !state.event.runner_enabled && role() !== 'admin') return 'none';
+    return 'browser';
   }
   langSel.addEventListener('change', drawRun);
 
@@ -344,12 +437,19 @@ export async function render(rt) {
   } });
 
   // ---- running ----
+  let running = false;
   async function runCode() {
+    if (running) return; // Ctrl+Enter while a run (or Python's first start) is still going
+    running = true;
+    try { await runCodeInner(); } finally { running = false; drawRun(); }
+  }
+  async function runCodeInner() {
     const entry = entrySel.value;
     if (!entry) return toast('Pick a file to run.', 'bad');
     const payload = {};
     for (const [p, f] of files) payload[p] = f.model.getValue();
     runBtn.disabled = true;
+    if (runMode() === 'browser') { await runInBrowser(entry, payload); runBtn.disabled = false; return; }
     clear(output, h('span', { class: 'sys' }, `$ run ${entry} (${state.runner.langs[langSel.value].name})\n`), h('span', { class: 'spinner' }));
     try {
       const r = await api.post('/api/run', { lang: langSel.value, entry, files: payload, stdin: stdin.value });
@@ -357,9 +457,29 @@ export async function render(rt) {
         h('span', { class: 'sys' }, `\n[exit ${r.exitCode ?? '?'} · ${(r.durationMs / 1000).toFixed(2)} s]`));
     } catch (e) {
       clear(output, h('span', { class: 'err' }, e.message));
-      if (e.status === 503) { state.runner.ready = false; state.runner.reason = e.message.replace(/^Code runner unavailable: /, ''); drawRun(); }
+      if (e.status === 503) {
+        state.runner.ready = false; state.runner.reason = e.message.replace(/^Code runner unavailable: /, ''); drawRun();
+        if (runMode() === 'browser') await runInBrowser(entry, payload); // the sandbox just went away: run it here instead
+      }
     }
     runBtn.disabled = false;
+  }
+  async function runInBrowser(entry, payload) {
+    const lang = langSel.value;
+    const spin = h('span', { class: 'spinner' });
+    const status = h('span', { class: 'sys' });
+    clear(output, h('span', { class: 'sys' }, `$ run ${entry} (${state.runner.langs[lang].name}, in your browser)\n`), status, spin);
+    let first = true;
+    const r = await browserRun({ lang, entry, files: payload, stdin: stdin.value,
+      onStatus: (t) => { status.textContent = t + '\n'; },
+      onOutput: (stream, text) => {
+        if (first) { first = false; status.remove(); }
+        spin.before(stream === 'stderr' ? h('span', { class: 'err' }, text) : text);
+      } }).catch((e) => ({ exitCode: null, error: e.message, durationMs: 0 }));
+    status.remove(); spin.remove();
+    if (r.error) output.append(h('span', { class: 'err' }, `\n${r.error}`));
+    const tail = r.timedOut ? 'stopped: over the 10 s limit' : r.truncated ? 'output cut off at 64 KB' : `exit ${r.exitCode ?? '?'} · ${(r.durationMs / 1000).toFixed(2)} s`;
+    output.append(h('span', { class: 'sys' }, `\n[${tail} · ran in your browser]`));
   }
 
   drawFiles(); drawBar(); drawRun(); sendPresence();
@@ -369,6 +489,11 @@ export async function render(rt) {
     h('button', { class: 'btn sm', onclick: newFile }, '+ File'),
     h('button', { class: 'btn secondary sm', onclick: () => importInput.click() }, 'Import'),
     h('button', { class: 'btn ghost sm', onclick: renameFile, title: 'Rename current file' }, 'Rename'),
+    h('button', { class: 'btn ghost sm', title: 'Add a sample program you can run', onclick: async () => {
+      const pick = await modal('Add a sample program', h('p', null, 'Adds a small runnable program in its own folder. Your files are not changed.'),
+        [{ label: 'Cancel', class: 'secondary', value: null }, ...Object.entries(SAMPLES).map(([k, smp]) => ({ label: smp.label, value: k }))]);
+      if (pick) addSample(pick);
+    } }, 'Sample'),
     h('button', { class: 'btn ghost sm', onclick: deleteFile, title: 'Delete current file', 'aria-label': 'Delete current file' }, '🗑'), importInput);
   const saveTop = h('button', { class: 'btn ghost sm', hidden: !canWrite, onclick: () => { const f = files.get(current); if (f) save(f, false); } }, 'Save');
 

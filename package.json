@@ -19,6 +19,7 @@
     "marked": "^18.1.2",
     "monaco-editor": "0.52.2",
     "multer": "^2.5.0",
+    "pyodide": "0.28.3",
     "sanitize-html": "^2.18.1",
     "socket.io": "^4.8.4"
   },

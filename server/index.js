@@ -23,7 +23,9 @@ const { canRead } = require('./routes/workspace');
 
 const app = express();
 app.disable('x-powered-by');
-app.set('trust proxy', 'loopback'); // ngrok / local reverse proxy
+// ngrok / local reverse proxy. A hosted copy behind a cloud proxy sets TRUST_PROXY (e.g. 1 = one hop)
+// so rate limits see each visitor's address instead of the proxy's.
+app.set('trust proxy', /^\d+$/.test(process.env.TRUST_PROXY || '') ? Number(process.env.TRUST_PROXY) : 'loopback');
 
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -35,6 +37,22 @@ app.use((req, res, next) => {
     "media-src 'self' blob:", "font-src 'self' data:", "connect-src 'self'", "worker-src 'self' blob:",
     "frame-ancestors 'none'", "base-uri 'none'", "object-src 'none'", "form-action 'self'",
   ].join('; '));
+  next();
+});
+
+// In-browser code runner (used when the Docker sandbox is unavailable). Its frame is sandboxed without
+// allow-same-origin, so it gets an opaque origin: code run there can't use the portal session (the
+// browser sends no cookies, and the API's X-Hak header would need a CORS approval we never give).
+// These files are public static assets, so that opaque origin may fetch them.
+app.use(['/runner', '/vendor/pyodide'], (req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  if (req.baseUrl === '/runner' && req.path === '/frame.html') {
+    res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+    res.setHeader('Content-Security-Policy', [
+      "default-src 'none'", "script-src 'self' blob: 'wasm-unsafe-eval' 'unsafe-eval'", "worker-src blob:", "connect-src 'self'",
+      "frame-ancestors 'self'", "base-uri 'none'", "form-action 'none'",
+    ].join('; '));
+  }
   next();
 });
 
@@ -54,6 +72,7 @@ app.use('/api', require('./routes/chat').router);
 app.use('/api', require('./routes/workspace').router);
 app.use('/api', require('./routes/submit').router);
 app.use('/api', require('./routes/judge').router);
+app.use('/api', require('./routes/registration').router); // before admin: it has public routes
 app.use('/api', require('./routes/admin').router);
 app.use('/api', (_req, _res, next) => next(new HttpError(404, 'Not found.')));
 
@@ -63,6 +82,9 @@ const nm = path.join(__dirname, '..', 'node_modules');
 const staticOpts = { maxAge: '7d', immutable: false, fallthrough: true };
 app.use('/vendor/monaco', express.static(path.join(nm, 'monaco-editor', 'min'), staticOpts));
 app.use('/vendor/hljs', express.static(path.join(nm, '@highlightjs', 'cdn-assets'), staticOpts));
+// Only the files the in-browser Python runner loads (not the package's demo pages).
+const PYODIDE_FILES = new Set(['/pyodide.js', '/pyodide.asm.js', '/pyodide.asm.wasm', '/python_stdlib.zip', '/pyodide-lock.json']);
+app.use('/vendor/pyodide', (req, res, next) => (PYODIDE_FILES.has(req.path) ? next() : res.status(404).send('Not found.')), express.static(path.join(nm, 'pyodide'), staticOpts));
 app.use(express.static(path.join(__dirname, '..', 'public'), { maxAge: 0, etag: true }));
 
 app.use((err, req, res, _next) => {

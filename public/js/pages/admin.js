@@ -2,12 +2,12 @@ import { h, clear, field, toast, busy, confirmBox, modal, promptBox, fmtTime, fm
 import { api } from '../api.js';
 import { state, on, role, go, loadMe, renderChrome, laneName, route } from '../app.js';
 
-const TABS = [['overview', 'Overview'], ['rehearsal', 'Rehearsal'], ['event', 'Event & schedule'], ['people', 'People'], ['codes', 'Access codes'], ['scoring', 'Scoring & awards'], ['audit', 'Audit log']];
+const TABS = [['overview', 'Overview'], ['rehearsal', 'Rehearsal'], ['event', 'Event & schedule'], ['registrations', 'Registrations'], ['checkin', 'Check-in'], ['people', 'People'], ['codes', 'Access codes'], ['scoring', 'Scoring & awards'], ['audit', 'Audit log']];
 
 export async function render(route) {
   if (role() !== 'admin') { go('#/'); return h('div'); }
   const tab = TABS.some(([k]) => k === route.params[0]) ? route.params[0] : 'overview';
-  const [body, clock] = await Promise.all([({ overview, rehearsal, event: eventTab, people, codes, scoring, audit })[tab](), state.event.is_demo ? demoClock() : null]);
+  const [body, clock] = await Promise.all([({ overview, rehearsal, event: eventTab, registrations, checkin, people, codes, scoring, audit })[tab](), state.event.is_demo ? demoClock() : null]);
   return h('div', null,
     h('div', { class: 'page-head' }, h('div', null, h('h1', null, 'Admin'), h('p', null, `${state.event.event_name} · event staff controls`))),
     clock,
@@ -36,6 +36,195 @@ async function demoClock() {
         catch (ex) { toast(ex.message, 'bad'); busy(e.target, false); }
       },
     }, x.label))));
+}
+
+// ---------------- registrations (before the event) ----------------
+const REG_STATUS = { pending: ['Pending', 'warn'], confirmed: ['Confirmed', 'ok'], waitlist: ['Waitlist', 'gold'], declined: ['Declined', 'bad'], cancelled: ['Cancelled', ''] };
+const regBadge = (st) => badge(...(REG_STATUS[st] || [st, '']));
+async function registrations() {
+  const root = h('div', { class: 'stack' });
+  let d = null, filter = 'all', q = '';
+  const tableBox = h('div', { class: 'table-wrap' });
+  const search = h('input', { type: 'search', placeholder: 'Search name, email or team', 'aria-label': 'Search registrations', style: { maxWidth: '280px' }, oninput: () => { q = search.value.trim().toLowerCase(); drawTable(); } });
+  const segBox = h('div', { class: 'seg', role: 'group', 'aria-label': 'Filter by status' });
+  const load = async () => { d = await api.get('/api/admin/registrations'); draw(); };
+  const setStatus = async (x, status) => {
+    try { const r = await api.patch(`/api/admin/registrations/${x.id}`, { status }); toast(r.warning || `${x.name}: ${REG_STATUS[status][0].toLowerCase()}.`, r.warning ? 'bad' : 'ok'); await load(); }
+    catch (e) { toast(e.message, 'bad'); await load(); }
+  };
+  function drawSeg() {
+    const s = d.summary;
+    clear(segBox, [['all', `All ${s.total}`], ['pending', `Pending ${s.pending}`], ['confirmed', `Confirmed ${s.confirmed}`], ['waitlist', `Waitlist ${s.waitlist}`], ['declined', `Declined ${s.declined + s.cancelled}`]]
+      .map(([k, label]) => h('button', { type: 'button', class: filter === k ? 'on' : '', 'aria-pressed': String(filter === k), onclick: () => { filter = k; drawSeg(); drawTable(); } }, label)));
+  }
+  function drawTable() {
+    const rows = d.registrations.filter((x) => (filter === 'all' || x.status === filter || (filter === 'declined' && x.status === 'cancelled'))
+      && (!q || `${x.name} ${x.email} ${x.team_name}`.toLowerCase().includes(q)));
+    if (!rows.length) return clear(tableBox, h('p', { class: 'faint' }, d.registrations.length ? 'Nobody matches.' : 'No registrations yet. Share the form link above.'));
+    clear(tableBox, h('table', { class: 'tbl' },
+      h('thead', null, h('tr', null, ['Student', 'Major', 'Team', 'Skills', 'Food & access', 'Status', 'Code', ''].map((x) => h('th', null, x)))),
+      h('tbody', null, rows.map((x) => h('tr', null,
+        h('td', null, h('b', null, x.name), h('div', { class: 'faint' }, x.email), h('div', { class: 'faint', style: { fontSize: '.78rem' } }, `Registered ${fmtDateTime(x.created_at)}`),
+          x.staff_note ? h('div', { class: 'faint', style: { fontSize: '.78rem' } }, `Note: ${x.staff_note}`) : null),
+        h('td', null, x.major || '—', h('div', { class: 'faint' }, x.class_level)),
+        h('td', null, x.team_mode === 'team' ? [h('b', null, x.team_name), x.teammates ? h('div', { class: 'faint', style: { fontSize: '.78rem', whiteSpace: 'pre-line', maxWidth: '220px' } }, x.teammates) : null]
+          : h('span', { class: 'faint' }, 'Match me'), x.lane ? h('div', { class: 'faint', style: { fontSize: '.78rem' } }, laneName(x.lane)) : null),
+        h('td', null, x.preferred_role || '—', x.technical ? h('div', null, badge('Technical', 'ok')) : null, x.skills ? h('div', { class: 'faint', style: { fontSize: '.78rem', maxWidth: '220px' } }, x.skills) : null,
+          x.experience ? h('details', null, h('summary', { class: 'faint', style: { fontSize: '.78rem', cursor: 'pointer' } }, 'Experience'), h('div', { style: { fontSize: '.82rem', maxWidth: '260px' } }, x.experience)) : null),
+        h('td', null, x.dietary ? h('div', null, '🍽 ', x.dietary) : null, x.accommodations ? h('div', null, '♿ ', x.accommodations) : null, !x.dietary && !x.accommodations ? '—' : null,
+          h('div', { class: 'faint', style: { fontSize: '.78rem' } }, x.media_ok ? 'Photos OK' : 'No photos')),
+        h('td', null, h('select', { 'aria-label': `Status for ${x.name}`, onchange: (e) => setStatus(x, e.target.value) },
+          Object.entries(REG_STATUS).map(([k, [label]]) => h('option', { value: k, selected: x.status === k }, label))),
+          x.checked_in_at ? h('div', { style: { marginTop: '4px' } }, badge(`Here ${fmtTime(x.checked_in_at)}`, 'ok')) : null),
+        h('td', null, x.user_id ? h('span', { class: 'faint' }, 'Has account', x.account_team ? h('div', null, x.account_team) : null)
+          : x.invite_code ? h('span', { class: 'code-chip' }, x.invite_code) : h('span', { class: 'faint' }, '—')),
+        h('td', { class: 'num' }, h('button', { class: 'btn ghost sm', 'aria-label': `Remove ${x.name}`, title: 'Remove (spam or duplicate)', onclick: async () => {
+          if (!(await confirmBox('Remove registration?', `Remove ${x.name} (${x.email})? Use "Cancelled" instead if they just dropped out.`, 'Remove', true))) return;
+          try { await api.del(`/api/admin/registrations/${x.id}`); await load(); } catch (e) { toast(e.message, 'bad'); }
+        } }, '✕')))))));
+  }
+  function draw() {
+    const s = d.summary;
+    const link = `${location.origin}/#/register`;
+    const stat = (label, value, sub) => h('div', { class: 'card' }, h('div', { class: 'faint' }, label), h('div', { style: { fontSize: '1.7rem', fontWeight: 800 } }, value), sub ? h('div', { class: 'faint' }, sub) : null);
+    const openChk = h('input', { type: 'checkbox', checked: d.open, onchange: async (e) => {
+      try { await api.put('/api/admin/settings', { signup_open: e.target.checked }); d.open = e.target.checked; toast(e.target.checked ? 'Registration form is open.' : 'Registration form is closed.', 'ok'); }
+      catch (ex) { e.target.checked = !e.target.checked; toast(ex.message, 'bad'); }
+    } });
+    drawSeg();
+    clear(root,
+      h('div', { class: 'grid', style: { gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))' } },
+        stat('Registered', s.total, `${s.pending} waiting for review`),
+        stat('Confirmed', `${s.confirmed} / ${s.capacity}`, `${s.waitlist} on the waitlist`),
+        stat('Teams named', s.teams.length, `${s.match} want team matching`),
+        stat('Food needs', s.dietary.length, `${s.accommodations.length} accommodation requests`)),
+      h('section', { class: 'card' },
+        h('div', { class: 'card-head' }, h('h2', null, 'Registration form'), h('label', { class: 'check', style: { margin: 0 } }, openChk, h('span', null, 'Open'))),
+        h('p', { class: 'faint' }, 'Students register here before the event; no account needed. Confirm spots first-qualified, first-confirmed (a team counts once all its members registered and one is technical). On event day the Check-in tab hands each confirmed student a personal access code.'),
+        h('div', { class: 'row' },
+          h('code', { style: { padding: '6px 10px', background: 'var(--panel-2)', borderRadius: '6px', wordBreak: 'break-all' } }, link),
+          h('button', { class: 'btn secondary sm', onclick: async () => { try { await navigator.clipboard.writeText(link); toast('Link copied.', 'ok'); } catch { toast('Copy the link from the box.', 'bad'); } } }, 'Copy link'),
+          h('a', { class: 'btn secondary sm', href: '#/register', target: '_blank', rel: 'noopener' }, 'Open form')),
+        h('div', { class: 'row', style: { marginTop: '12px' } },
+          h('button', { class: 'btn sm', onclick: async (e) => {
+            busy(e.target, true, 'Making codes…');
+            try { const r = await api.post('/api/admin/registrations/codes'); toast(r.made.length ? `${r.made.length} new access codes. Export the list to print badges.` : 'Every confirmed student already has a code or an account.', 'ok'); await load(); }
+            catch (ex) { toast(ex.message, 'bad'); busy(e.target, false); }
+          } }, 'Make access codes for confirmed'),
+          h('a', { class: 'btn secondary sm', href: '/api/admin/export/registrations.csv' }, '⬇ Registrations CSV'))),
+      s.teams.length ? h('section', { class: 'card table-wrap' }, h('h2', null, 'Teams from registration'),
+        h('p', { class: 'faint' }, 'Grouped by the team name students typed. A team is ready to confirm once every member has registered and at least one is technical.'),
+        h('table', { class: 'tbl' }, h('thead', null, h('tr', null, ['Team', 'Registered members', 'Technical member'].map((x) => h('th', null, x)))),
+          h('tbody', null, s.teams.map((t) => h('tr', null, h('td', null, h('b', null, t.team_name)),
+            h('td', null, t.members.map((m, i) => [i ? ', ' : '', m.name, m.status !== 'confirmed' ? h('span', { class: 'faint' }, ` (${REG_STATUS[m.status][0].toLowerCase()})`) : null])),
+            h('td', null, t.technical ? tick(true) : [tick(false, 'warn'), h('span', { class: 'faint' }, ' none yet')])))))) : null,
+      (s.dietary.length || s.accommodations.length) ? h('section', { class: 'card' }, h('h2', null, 'Food & accessibility'),
+        h('p', { class: 'faint' }, 'For the food order (lock the count 72 hours before) and room setup. Declined and cancelled registrations are left out.'),
+        h('div', { class: 'grid two' },
+          h('div', null, h('b', null, `Dietary (${s.dietary.length})`), s.dietary.length ? h('ul', { style: { margin: '6px 0', paddingLeft: '18px' } }, s.dietary.map((x) => h('li', null, h('b', null, x.name), ': ', x.text))) : h('p', { class: 'faint' }, 'None.')),
+          h('div', null, h('b', null, `Accommodations (${s.accommodations.length})`), s.accommodations.length ? h('ul', { style: { margin: '6px 0', paddingLeft: '18px' } }, s.accommodations.map((x) => h('li', null, h('b', null, x.name), ': ', x.text))) : h('p', { class: 'faint' }, 'None.')))) : null,
+      h('section', { class: 'card' },
+        h('div', { class: 'card-head', style: { flexWrap: 'wrap', gap: '8px' } }, h('h2', null, 'Registrations'), h('div', { class: 'row' }, segBox, search)),
+        tableBox));
+    drawTable();
+  }
+  await load();
+  on('staff:update', (x) => { if (!x || x.kind === 'registration') load().catch(() => {}); });
+  return root;
+}
+
+// ---------------- check-in desk (event day) ----------------
+async function checkin() {
+  const root = h('div', { class: 'stack' });
+  let d = null, q = '', view = 'todo';
+  const list = h('div', { 'aria-live': 'polite' });
+  const counts = h('div');
+  const segBox = h('div', { class: 'seg', role: 'group', 'aria-label': 'Show' });
+  const search = h('input', { type: 'search', class: 'desk-search', placeholder: 'Type a name or email…', 'aria-label': 'Find a student to check in', autocomplete: 'off',
+    oninput: () => { q = search.value.trim().toLowerCase(); drawList(); } });
+  const teamsBox = h('div');
+  const load = async () => { d = await api.get('/api/admin/registrations'); drawCounts(); drawSeg(); drawList(); clear(teamsBox, d.summary.teams.length ? teamsCard() : null); };
+  const doCheck = async (x, on, idChecked, btn) => {
+    if (btn) busy(btn, true, on ? 'Checking in…' : 'Undoing…');
+    try {
+      const r = await api.post(`/api/admin/registrations/${x.id}/checkin`, { in: on, id_checked: idChecked });
+      if (on) toast(h('div', null, h('b', null, `${x.name} is checked in.`), r.code ? h('div', null, 'Access code: ', h('span', { class: 'code-chip' }, r.code), ' (write it on the badge)') : h('div', null, 'They already have a portal account.')), 'ok', 9000);
+      if (on && r.confirmed_now) toast(`${x.name} was not confirmed before; they are confirmed now.`, '', 6000);
+      await load();
+      if (on) { search.value = ''; q = ''; drawList(); search.focus(); }
+    } catch (e) { toast(e.message, 'bad'); if (btn) busy(btn, false); }
+  };
+  function drawCounts() {
+    const s = d.summary;
+    const pct = s.expected ? Math.min(100, Math.round((s.checked_in / Math.max(s.expected, s.checked_in)) * 100)) : 0;
+    clear(counts, h('div', { class: 'row between' },
+      h('div', null, h('div', { style: { fontSize: '1.9rem', fontWeight: 800 } }, `${s.checked_in} `, h('span', { class: 'faint', style: { fontSize: '1.1rem', fontWeight: 600 } }, `of ${s.expected} confirmed here`)),
+        ((n) => h('div', { class: 'faint' }, n ? `${n} confirmed ${n === 1 ? 'student' : 'students'} not here yet` : 'Every confirmed student is here'))(d.registrations.filter((x) => x.status === 'confirmed' && !x.checked_in_at).length)),
+      h('div', { class: 'row' },
+        h('button', { class: 'btn secondary sm', onclick: walkIn }, '+ Walk-in'),
+        h('a', { class: 'btn secondary sm', href: '/api/admin/export/attendance.csv' }, '⬇ Attendance CSV'))),
+    h('div', { class: 'meter', role: 'progressbar', 'aria-label': 'Checked in', 'aria-valuenow': String(pct), 'aria-valuemin': '0', 'aria-valuemax': '100' }, h('span', { style: { width: `${pct}%` } })));
+  }
+  function drawSeg() {
+    const notHere = d.registrations.filter((x) => x.status === 'confirmed' && !x.checked_in_at).length;
+    clear(segBox, [['todo', `Not here yet ${notHere}`], ['in', `Checked in ${d.summary.checked_in}`], ['all', `Everyone ${d.registrations.length}`]]
+      .map(([k, label]) => h('button', { type: 'button', class: view === k ? 'on' : '', 'aria-pressed': String(view === k), onclick: () => { view = k; drawSeg(); drawList(); } }, label)));
+  }
+  function drawList() {
+    const pool = q ? d.registrations.filter((x) => `${x.name} ${x.email} ${x.team_name}`.toLowerCase().includes(q))
+      : d.registrations.filter((x) => (view === 'all' ? true : view === 'in' ? !!x.checked_in_at : x.status === 'confirmed' && !x.checked_in_at));
+    const rows = pool.slice().sort((a, b) => a.name.localeCompare(b.name)).slice(0, 120);
+    if (!rows.length) return clear(list, h('p', { class: 'faint', style: { padding: '8px 4px' } }, q ? 'Nobody matches. Not registered? Use + Walk-in.' : view === 'todo' ? 'Everyone confirmed is here.' : 'Nobody yet.'));
+    clear(list, rows.map((x) => {
+      const here = !!x.checked_in_at;
+      const idBox = h('input', { type: 'checkbox', checked: !!x.id_checked, 'aria-label': `Zip card checked for ${x.name}` });
+      return h('div', { class: `desk-row ${here ? 'in' : ''}` },
+        h('div', { class: 'who' }, h('b', null, x.name), ' ', x.status !== 'confirmed' ? regBadge(x.status) : null,
+          h('div', { class: 'faint' }, x.email, x.team_mode === 'team' && x.team_name ? ` · team ${x.team_name}` : ' · needs a team', x.account_team ? ` · on ${x.account_team}` : ''),
+          x.dietary ? h('div', { class: 'faint', style: { fontSize: '.82rem' } }, '🍽 ', x.dietary) : null,
+          x.accommodations ? h('div', { class: 'faint', style: { fontSize: '.82rem' } }, '♿ ', x.accommodations) : null),
+        h('div', { class: 'acts' }, here
+          ? [badge(`✓ ${fmtTime(x.checked_in_at)}`, 'ok'), x.id_checked ? h('span', { class: 'faint' }, 'Zip card ✓') : null,
+            x.user_id ? h('span', { class: 'faint' }, 'Has account') : x.invite_code ? h('span', { class: 'code-chip', title: 'Personal access code' }, x.invite_code) : null,
+            h('button', { class: 'btn ghost sm', onclick: (e) => doCheck(x, false, false, e.currentTarget) }, 'Undo')]
+          : [h('label', { class: 'check', style: { margin: 0 } }, idBox, h('span', null, 'Zip card checked')),
+            h('button', { class: 'btn', onclick: (e) => doCheck(x, true, idBox.checked, e.currentTarget) }, x.status === 'confirmed' ? 'Check in' : 'Check in anyway')]));
+    }), pool.length > rows.length ? h('p', { class: 'faint' }, `Showing 120 of ${pool.length}. Type to narrow down.`) : null);
+  }
+  async function walkIn() {
+    const name = h('input', { type: 'text', maxlength: 80, autocomplete: 'off' });
+    const email = h('input', { type: 'email', maxlength: 200, autocomplete: 'off', placeholder: 'name@zips.uakron.edu' });
+    const major = h('input', { type: 'text', maxlength: 80 });
+    const idChk = h('input', { type: 'checkbox' });
+    const r = await modal('Walk-in check-in', h('div', null,
+      h('p', { class: 'faint' }, 'For a student who did not register. They are confirmed and checked in now, and get an access code.'),
+      field('Name', name), field('University email', email), field('Major (optional)', major),
+      h('label', { class: 'check' }, idChk, h('span', null, 'Zip card checked'))),
+    [{ label: 'Cancel', class: 'secondary', value: null }, { label: 'Check in', handler: () => api.post('/api/admin/registrations/walkin', { name: name.value, email: email.value, major: major.value, id_checked: idChk.checked }) }]);
+    if (!r) return;
+    toast(h('div', null, h('b', null, `${name.value} is checked in.`), r.code ? h('div', null, 'Access code: ', h('span', { class: 'code-chip' }, r.code)) : null), 'ok', 9000);
+    await load();
+  }
+  await load();
+  clear(root,
+    h('section', { class: 'card' }, counts),
+    h('section', { class: 'card' },
+      h('div', { class: 'card-head', style: { flexWrap: 'wrap', gap: '8px' } }, h('h2', null, 'Check-in desk'), segBox),
+      h('p', { class: 'faint', style: { marginTop: 0 } }, 'Find the student, check their Zip card, press Check in, and write the access code on their badge. They use it to create their portal account.'),
+      search, h('div', { style: { marginTop: '10px' } }, list)),
+    teamsBox);
+  function teamsCard() {
+    return h('section', { class: 'card table-wrap' }, h('h2', null, 'Teams here'),
+      h('table', { class: 'tbl' }, h('thead', null, h('tr', null, ['Team (from registration)', 'Here', 'Still missing'].map((x) => h('th', null, x)))),
+        h('tbody', null, d.summary.teams.map((t) => {
+          const inN = t.members.filter((m) => m.checked_in).length;
+          return h('tr', null, h('td', null, h('b', null, t.team_name)), h('td', null, `${inN} / ${t.members.length}`),
+            h('td', { class: 'faint' }, t.members.filter((m) => !m.checked_in).map((m) => m.name).join(', ') || '—'));
+        }))));
+  }
+  on('staff:update', (x) => { if (!x || x.kind === 'registration') load().catch(() => {}); });
+  setTimeout(() => search.focus(), 50);
+  return root;
 }
 
 // ---------------- overview ----------------
@@ -140,23 +329,31 @@ async function eventTab() {
   const { settings: s } = await api.get('/api/admin/settings');
   const inp = (k, type = 'text', extra = {}) => h('input', { type, name: k, value: type === 'datetime-local' ? toLocal(s[k]) : s[k], ...extra });
   const chk = (k, label, hint) => h('label', { class: 'check', style: { marginBottom: '10px' } }, h('input', { type: 'checkbox', name: k, checked: !!s[k] }), h('span', null, h('b', null, label), hint ? h('div', { class: 'faint' }, hint) : null));
+  // Editable rows of { start, end, title, detail } (schedule and meals).
+  const timedRows = (list, what, newTitle) => {
+    const box = h('div');
+    const draw = () => clear(box, h('table', { class: 'tbl' }, h('thead', null, h('tr', null, ['Start', 'End', 'Title', 'Detail', ''].map((x) => h('th', null, x)))),
+      h('tbody', null, list.map((x, i) => h('tr', null,
+        h('td', null, h('input', { type: 'datetime-local', 'aria-label': `${what} ${i + 1} start`, value: toLocal(x.start), onchange: (e) => { x.start = fromLocal(e.target.value); } })),
+        h('td', null, h('input', { type: 'datetime-local', 'aria-label': `${what} ${i + 1} end`, value: toLocal(x.end), onchange: (e) => { x.end = fromLocal(e.target.value); } })),
+        h('td', null, h('input', { type: 'text', 'aria-label': `${what} ${i + 1} title`, value: x.title, oninput: (e) => { x.title = e.target.value; } })),
+        h('td', null, h('input', { type: 'text', 'aria-label': `${what} ${i + 1} detail`, value: x.detail, oninput: (e) => { x.detail = e.target.value; } })),
+        h('td', null, h('button', { class: 'btn ghost sm', 'aria-label': `Remove ${what.toLowerCase()} ${i + 1}`, onclick: () => { list.splice(i, 1); draw(); } }, '✕')))))),
+    h('button', { class: 'btn secondary sm', style: { marginTop: '8px' }, onclick: () => { const last = list[list.length - 1]; list.push({ start: last ? last.end : new Date().toISOString(), end: last ? last.end : new Date().toISOString(), title: newTitle, detail: '' }); draw(); } }, '+ Row'));
+    draw();
+    return box;
+  };
   const sched = s.schedule.map((x) => ({ ...x }));
-  const schedBox = h('div');
-  const drawSched = () => clear(schedBox, h('table', { class: 'tbl' }, h('thead', null, h('tr', null, ['Start', 'End', 'Title', 'Detail', ''].map((x) => h('th', null, x)))),
-    h('tbody', null, sched.map((x, i) => h('tr', null,
-      h('td', null, h('input', { type: 'datetime-local', 'aria-label': `Row ${i + 1} start`, value: toLocal(x.start), onchange: (e) => { x.start = fromLocal(e.target.value); } })),
-      h('td', null, h('input', { type: 'datetime-local', 'aria-label': `Row ${i + 1} end`, value: toLocal(x.end), onchange: (e) => { x.end = fromLocal(e.target.value); } })),
-      h('td', null, h('input', { type: 'text', 'aria-label': `Row ${i + 1} title`, value: x.title, oninput: (e) => { x.title = e.target.value; } })),
-      h('td', null, h('input', { type: 'text', 'aria-label': `Row ${i + 1} detail`, value: x.detail, oninput: (e) => { x.detail = e.target.value; } })),
-      h('td', null, h('button', { class: 'btn ghost sm', 'aria-label': `Remove row ${i + 1}`, onclick: () => { sched.splice(i, 1); drawSched(); } }, '✕')))))),
-  h('button', { class: 'btn secondary sm', style: { marginTop: '8px' }, onclick: () => { const last = sched[sched.length - 1]; sched.push({ start: last ? last.end : new Date().toISOString(), end: last ? last.end : new Date().toISOString(), title: 'New item', detail: '' }); drawSched(); } }, '+ Row'));
-  drawSched();
+  const meals = (s.meals || []).map((x) => ({ ...x }));
+  const schedBox = timedRows(sched, 'Row', 'New item');
+  const mealBox = timedRows(meals, 'Meal', 'Snacks');
 
   const form = h('div', { class: 'stack' });
   const save = async (btn) => {
     const v = {};
     for (const el of form.querySelectorAll('[name]')) v[el.name] = el.type === 'checkbox' ? el.checked : el.type === 'datetime-local' ? fromLocal(el.value) : el.type === 'number' ? Number(el.value) : el.value;
     v.schedule = sched;
+    v.meals = meals;
     busy(btn, true, 'Saving…');
     try { await api.put('/api/admin/settings', v); await loadMe(); renderChrome(); toast('Event settings saved. Everyone sees the new times now.', 'ok'); }
     catch (e) { toast(e.message, 'bad'); }
@@ -183,6 +380,7 @@ async function eventTab() {
       chk('registration_open', 'Participant registration open'),
       chk('runner_enabled', 'Code runner on for participants', 'Turn off to pause all code runs (e.g. if the computer is overloaded).')),
     h('section', { class: 'card' }, h('h2', null, 'Schedule'), h('p', { class: 'faint' }, 'Shown on everyone’s home page and drives the “Now / Next” clock.'), h('div', { class: 'table-wrap' }, schedBox)),
+    h('section', { class: 'card' }, h('h2', null, 'Food'), h('p', { class: 'faint' }, 'Every screen shows the next meal in the top-right corner and pops up a reminder 10 minutes before and when it starts. Put where to get it in Detail.'), h('div', { class: 'table-wrap' }, mealBox)),
     h('div', { class: 'row end', style: { position: 'sticky', bottom: '12px' } }, saveBtn));
   return form;
 }

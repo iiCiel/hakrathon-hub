@@ -102,10 +102,34 @@ function seed() {
   const ann = get("SELECT id FROM users WHERE role = 'admin'").id;
   run("INSERT INTO messages (channel, user_id, body) VALUES ('announcements', ?, ?)", ann, 'Welcome to HAkrathon 2026! Checkpoint 2 is due at 3:15. Mentors are at the help desk; request one from the **Mentors** tab.');
   run("INSERT INTO messages (channel, user_id, body) VALUES ('general', ?, ?)", get("SELECT id FROM users WHERE email = 'student1@zips.uakron.edu'").id, 'Anyone know if the Wi-Fi blocks port 5000? Our Flask app works with:\n```python\napp.run(host="0.0.0.0", port=8080)\n```');
+  // Event registration + check-in: the nine team members registered weeks ago and checked in at
+  // 7:30-8:00; a few more are pending, waitlisted, or confirmed but not here.
+  const adminId = get("SELECT id FROM users WHERE role = 'admin'").id;
+  const diet = { 'student1@zips.uakron.edu': 'Vegetarian', 'student4@zips.uakron.edu': 'Nut allergy' };
+  const regAt = (days) => new Date(Date.now() - days * 86400000).toISOString();
+  all("SELECT u.email, u.name, u.major, u.preferred_role, t.name AS team, t.lane FROM users u JOIN teams t ON t.id = u.team_id WHERE u.role = 'participant' ORDER BY u.id").forEach((u, i) => {
+    run(`INSERT INTO registrations (email, name, major, class_level, team_mode, team_name, lane, preferred_role, skills, technical, dietary, media_ok, status, checked_in_at, checked_in_by, id_checked, created_at, updated_at)
+      VALUES (?,?,?,?,'team',?,?,?,?,?,?,1,'confirmed',?,?,1,?,?)`, u.email, u.name, u.major, ['Junior', 'Senior', 'Sophomore'][i % 3], u.team, u.lane, u.preferred_role, 'Python, SQL',
+    u.preferred_role === 'Technical builder' ? 1 : 0, diet[u.email] || '', ago(345 - i * 3), adminId, regAt(20 - i), ago(345 - i * 3));
+  });
+  for (const [email, name, major, mode, team, status, dietary, days] of [
+    ['jordan.blake@zips.uakron.edu', 'Jordan Blake', 'Information Systems', 'match', '', 'confirmed', 'Halal', 9],
+    ['lena.ortiz@zips.uakron.edu', 'Lena Ortiz', 'Computer Science', 'team', 'Data Dawgs', 'confirmed', '', 8],
+    ['kai.turner@zips.uakron.edu', 'Kai Turner', 'Finance', 'team', 'Data Dawgs', 'waitlist', '', 4],
+    ['sam.reyes@zips.uakron.edu', 'Sam Reyes', 'Marketing', 'match', '', 'pending', 'Gluten-free', 1],
+  ]) {
+    run(`INSERT INTO registrations (email, name, major, class_level, team_mode, team_name, preferred_role, skills, technical, dietary, media_ok, status, created_at, updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,1,?,?,?)`, email, name, major, 'Junior', mode, team, mode === 'team' ? 'Technical builder' : 'Flexible', 'Python, Excel', mode === 'team' ? 1 : 0, dietary, status, regAt(days), regAt(days));
+  }
 }
 
 if (fresh) seed();
 else {
+  // A demo made before meal times existed: put the default meals on the demo's moved clock.
+  if (!get("SELECT 1 AS x FROM settings WHERE key = 'meals'")) {
+    const sh = Number(S.getSettings().demo_shift_ms) || 0;
+    S.setSettings({ meals: S.DEFAULTS.meals.map((m) => ({ ...m, start: new Date(Date.parse(m.start) + sh).toISOString(), end: new Date(Date.parse(m.end) + sh).toISOString() })) });
+  }
   // A demo left from another day would show the event as long over: put it back to Build Sprint 2
   // unless it is somewhere inside event day (7:30 a.m.-7:30 p.m.).
   const t = democlock.demoNow();

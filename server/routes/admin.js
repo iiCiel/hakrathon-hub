@@ -53,7 +53,7 @@ r.put('/admin/settings', wrap((req) => {
   for (const k of ['event_name', 'tagline']) if (k in b) patch[k] = str(b[k], { max: 120, required: true, name: k });
   if ('challenge' in b) patch.challenge = str(b.challenge, { max: 4000, required: true, name: 'Challenge' });
   if ('participant_email_domains' in b) patch.participant_email_domains = str(b.participant_email_domains, { max: 300 });
-  for (const k of ['challenge_released', 'judging_open', 'finalists_open', 'results_published', 'registration_open', 'one_prize_per_team', 'runner_enabled']) if (k in b) patch[k] = !!b[k];
+  for (const k of ['challenge_released', 'judging_open', 'finalists_open', 'results_published', 'registration_open', 'signup_open', 'one_prize_per_team', 'runner_enabled']) if (k in b) patch[k] = !!b[k];
   if ('global_extension_minutes' in b) patch.global_extension_minutes = int(b.global_extension_minutes, { min: 0, max: 240, name: 'Extension minutes' });
   if ('max_teams' in b) patch.max_teams = int(b.max_teams, { min: 1, max: 100, name: 'Max teams' });
   if ('team_min' in b) patch.team_min = int(b.team_min, { min: 1, max: 20, name: 'Team minimum' });
@@ -64,13 +64,16 @@ r.put('/admin/settings', wrap((req) => {
     if (!Array.isArray(b.finalists) || b.finalists.length > 10) throw new HttpError(400, 'Finalists must be a list of teams.');
     patch.finalists = b.finalists.map((x) => teamExists(x));
   }
-  if ('schedule' in b) {
-    if (!Array.isArray(b.schedule) || b.schedule.length > 60) throw new HttpError(400, 'Bad schedule.');
-    patch.schedule = b.schedule.map((x) => {
-      if (Number.isNaN(Date.parse(x.start)) || Number.isNaN(Date.parse(x.end || x.start))) throw new HttpError(400, 'Every schedule row needs valid times.');
-      return { start: new Date(x.start).toISOString(), end: new Date(x.end || x.start).toISOString(), title: str(x.title, { max: 80, required: true, name: 'Schedule title' }), detail: str(x.detail, { max: 400 }) };
+  const timedRows = (list, max, what) => {
+    if (!Array.isArray(list) || list.length > max) throw new HttpError(400, `Bad ${what}.`);
+    return list.map((x) => {
+      if (!x || Number.isNaN(Date.parse(x.start)) || Number.isNaN(Date.parse(x.end || x.start))) throw new HttpError(400, `Every ${what} row needs valid times.`);
+      if (Date.parse(x.end || x.start) < Date.parse(x.start)) throw new HttpError(400, `A ${what} row ends before it starts.`);
+      return { start: new Date(x.start).toISOString(), end: new Date(x.end || x.start).toISOString(), title: str(x.title, { max: 80, required: true, name: `${what[0].toUpperCase()}${what.slice(1)} title` }), detail: str(x.detail, { max: 400 }) };
     }).sort((a, c) => Date.parse(a.start) - Date.parse(c.start));
-  }
+  };
+  if ('schedule' in b) patch.schedule = timedRows(b.schedule, 60, 'schedule');
+  if ('meals' in b) patch.meals = timedRows(b.meals, 12, 'meal');
   const s = S.setSettings(patch);
   if (s.team_min > s.team_max) { S.setSettings({ team_min: before.team_min, team_max: before.team_max }); throw new HttpError(400, 'Team minimum is larger than maximum.'); }
   // Moving the freeze later re-opens teams; their official snapshot must be re-taken at the new freeze.
@@ -123,6 +126,10 @@ r.patch('/admin/users/:id', wrap((req) => {
     'disabled' in b ? (b.disabled ? 1 : 0) : u.disabled, 'checked_in' in b ? (b.checked_in ? 1 : 0) : u.checked_in,
     'name' in b ? str(b.name, { max: 80, required: true, name: 'Name' }) : u.name, u.id);
   if (b.disabled) { A.destroyUserSessions(u.id); bus.disconnectUser(u.id); }
+  // Keep the check-in desk in step when staff tick "checked in" on the People tab.
+  if ('checked_in' in b && !!b.checked_in !== !!u.checked_in) {
+    run("UPDATE registrations SET checked_in_at = ?, checked_in_by = ?, updated_at = ? WHERE email = ?", b.checked_in ? now() : '', b.checked_in ? req.user.id : null, now(), u.email);
+  }
   audit(req.user.id, 'user.update', { id: u.id, role, teamId, disabled: b.disabled });
   bus.syncUser(u.id);
   for (const t of new Set([oldTeam, teamId].filter(Boolean))) bus.emit(`team:${t}`, 'team:update', {});
@@ -419,6 +426,13 @@ r.get('/admin/export/:what', (req, res, next) => {
     } else if (what === 'invites') {
       rows = all("SELECT email, code, role, note, uses, max_uses, revoked FROM invites WHERE email != '' ORDER BY email");
       cols = ['email', 'code', 'role', 'note', 'uses', 'max_uses', 'revoked'];
+    } else if (what === 'registrations' || what === 'attendance') {
+      rows = all(`SELECT g.name, g.email, g.status, g.major, g.class_level, g.team_mode, g.team_name, g.teammates, g.lane, g.preferred_role, g.skills, g.experience,
+        g.technical, g.dietary, g.accommodations, g.media_ok, g.invite_code, g.checked_in_at, g.id_checked, g.staff_note, g.created_at, t.name AS account_team
+        FROM registrations g LEFT JOIN users u ON u.email = g.email LEFT JOIN teams t ON t.id = u.team_id ORDER BY ${what === 'attendance' ? "g.checked_in_at = '', g.name" : 'g.id'}`);
+      if (what === 'attendance') rows = rows.filter((x) => x.status === 'confirmed' || x.checked_in_at);
+      cols = what === 'attendance' ? ['name', 'email', 'status', 'checked_in_at', 'id_checked', 'account_team', 'invite_code', 'dietary', 'accommodations']
+        : ['name', 'email', 'status', 'major', 'class_level', 'team_mode', 'team_name', 'teammates', 'lane', 'preferred_role', 'skills', 'experience', 'technical', 'dietary', 'accommodations', 'media_ok', 'invite_code', 'checked_in_at', 'id_checked', 'staff_note', 'created_at'];
     } else if (what === 'mentor-log') {
       rows = all(`SELECT h.created_at, t.name AS team, h.kind, h.summary, h.status, m.name AS mentor, h.mentor_note, h.resolved_at
         FROM help_requests h JOIN teams t ON t.id = h.team_id LEFT JOIN users m ON m.id = h.mentor_id ORDER BY h.id`);

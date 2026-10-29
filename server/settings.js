@@ -51,6 +51,14 @@ const SCHEDULE = [
   ['19:10', '19:30', 'Photos & close', 'Photos, sponsor recognition, survey, dismissal.'],
 ].map(([s, e, title, detail]) => ({ start: T(s), end: T(e), title, detail }));
 
+// Food service (Event Scope §6): breakfast at check-in, working lunch, meal break during validation.
+// Shown as a reminder in the top-right corner of every screen; staff can edit or add (e.g. snacks).
+const MEALS = [
+  ['07:30', '08:00', 'Breakfast', 'Breakfast is out at check-in.'],
+  ['12:00', '12:30', 'Lunch', 'Working lunch: teams stay at their tables.'],
+  ['16:30', '17:00', 'Dinner', 'Meal break while staff validate submissions.'],
+].map(([s, e, title, detail]) => ({ start: T(s), end: T(e), title, detail }));
+
 const DEFAULTS = {
   event_name: 'HAkrathon 2026',
   tagline: 'Build • Solve • Innovate',
@@ -67,6 +75,7 @@ const DEFAULTS = {
   finalists_open: false,
   results_published: false,
   registration_open: true,
+  signup_open: true, // the public event registration form (before the event)
   max_teams: 10,
   team_min: 3,
   team_max: 5,
@@ -76,6 +85,7 @@ const DEFAULTS = {
   criteria: CRITERIA,
   awards: AWARDS,
   schedule: SCHEDULE,
+  meals: MEALS,
   one_prize_per_team: true,
   finalists: [],
   min_judges: 3,

@@ -183,6 +183,106 @@ test('mentor help queue', async () => {
   assert.equal(mine[0].mentor_note, '', 'participants do not see mentor log');
 });
 
+test('event registration, check-in desk, and account carry-over', async () => {
+  const anon = new Client();
+  const info = ok(await anon.get('/api/registration'));
+  assert.equal(info.open, true);
+  const form = { name: 'Reg One', email: 'reg1@zips.uakron.edu', major: 'Finance', class_level: 'Senior', team_mode: 'team', team_name: 'Reg Team', technical: true,
+    dietary: 'Vegan', media_ok: true, agree_rules: true, agree_disclosure: true };
+  ok(await anon.post('/api/registration', form));
+  status(await anon.post('/api/registration', form), 409, 'same email twice');
+  status(await anon.post('/api/registration', { ...form, email: 'x@gmail.com' }), 400, 'not a UA email');
+  status(await anon.post('/api/registration', { ...form, email: 'reg2@zips.uakron.edu', agree_rules: false }), 400, 'rules not agreed');
+  status(await anon.post('/api/registration', { ...form, email: 'reg2@zips.uakron.edu', class_level: 'Wizard' }), 400, 'bad class level');
+  status(await anon.post('/api/registration', { ...form, email: 'reg2@zips.uakron.edu', team_name: '' }), 400, 'team without a name');
+  status(await anon.req('POST', '/api/registration', { ...form, email: 'reg2@zips.uakron.edu' }, { noHeader: true }), 403, 'CSRF header');
+  status(await anon.get('/api/admin/registrations'), 401);
+  status(await p[0].get('/api/admin/registrations'), 403);
+  status(await p[0].post('/api/admin/registrations/walkin', { name: 'A', email: 'a1@zips.uakron.edu' }), 403);
+  let d = ok(await admin.get('/api/admin/registrations'));
+  const r1 = d.registrations.find((x) => x.email === 'reg1@zips.uakron.edu');
+  assert.equal(r1.status, 'pending');
+  assert.ok(d.summary.dietary.some((x) => x.text === 'Vegan'));
+  assert.ok(d.summary.teams.some((t) => t.team_name === 'Reg Team' && t.technical));
+  ok(await admin.put('/api/admin/settings', { signup_open: false }));
+  status(await anon.post('/api/registration', { ...form, email: 'reg3@zips.uakron.edu' }), 403, 'form closed');
+  assert.equal(ok(await anon.get('/api/registration')).open, false);
+  ok(await admin.put('/api/admin/settings', { signup_open: true }));
+  // Check-in confirms them and hands out a personal code; the account made with it is checked in
+  // and keeps what they registered with.
+  const ci = ok(await admin.post(`/api/admin/registrations/${r1.id}/checkin`, { in: true, id_checked: true }));
+  assert.match(ci.code, /^PAR-/);
+  assert.equal(ci.confirmed_now, true);
+  const stu = new Client();
+  status(await stu.post('/api/auth/register', { invite: ci.code, email: 'someone@zips.uakron.edu', name: 'X', password: 'password123', agree: true }), 400, 'code bound to the email');
+  const me = ok(await stu.post('/api/auth/register', { invite: ci.code, email: 'reg1@zips.uakron.edu', name: 'Reg One', password: 'password123', agree: true })).user;
+  assert.equal(me.checked_in, true);
+  assert.equal(me.major, 'Finance');
+  const w = ok(await admin.post('/api/admin/registrations/walkin', { name: 'Walk In', email: 'walk1@zips.uakron.edu', id_checked: true }));
+  assert.match(w.code, /^PAR-/);
+  status(await admin.post('/api/admin/registrations/walkin', { name: 'Walk In', email: 'walk1@zips.uakron.edu' }), 409);
+  status(await admin.post('/api/admin/registrations/walkin', { name: 'Walk In', email: 'walk@gmail.com' }), 400);
+  // Undo clears it on the account too; the People tab tick goes back to the desk.
+  ok(await admin.post(`/api/admin/registrations/${r1.id}/checkin`, { in: false }));
+  assert.equal(get('SELECT checked_in FROM users WHERE email = ?', 'reg1@zips.uakron.edu').checked_in, 0);
+  ok(await admin.patch(`/api/admin/users/${me.id}`, { checked_in: true }));
+  assert.ok(get('SELECT checked_in_at FROM registrations WHERE email = ?', 'reg1@zips.uakron.edu').checked_in_at);
+  // Codes for everyone confirmed, status changes, export, remove.
+  ok(await anon.post('/api/registration', { ...form, email: 'reg4@zips.uakron.edu', team_mode: 'match' }));
+  d = ok(await admin.get('/api/admin/registrations'));
+  const r4 = d.registrations.find((x) => x.email === 'reg4@zips.uakron.edu');
+  assert.equal(r4.team_mode, 'match');
+  assert.equal(r4.team_name, '');
+  status(await admin.patch(`/api/admin/registrations/${r4.id}`, { status: 'bogus' }), 400);
+  ok(await admin.patch(`/api/admin/registrations/${r4.id}`, { status: 'confirmed' }));
+  const codes = ok(await admin.post('/api/admin/registrations/codes'));
+  assert.ok(codes.made.some((x) => x.email === 'reg4@zips.uakron.edu'));
+  assert.equal(ok(await admin.post('/api/admin/registrations/codes')).made.length, 0, 'codes are made once');
+  const csv = await admin.req('GET', '/api/admin/export/attendance.csv', undefined, { raw: true });
+  assert.equal(csv.status, 200);
+  const text = await csv.text();
+  assert.ok(text.includes('reg4@zips.uakron.edu') && text.includes('walk1@zips.uakron.edu'));
+  const c4 = codes.made.find((x) => x.email === 'reg4@zips.uakron.edu').code;
+  ok(await admin.patch(`/api/admin/registrations/${r4.id}`, { status: 'cancelled' }));
+  assert.equal(get('SELECT revoked FROM invites WHERE code = ?', c4).revoked, 1, 'a cancelled registration loses its unused code');
+  status(await new Client().post('/api/auth/register', { invite: c4, email: 'reg4@zips.uakron.edu', name: 'R4', password: 'password123', agree: true }), 400);
+  ok(await admin.del(`/api/admin/registrations/${r4.id}`));
+  status(await admin.del(`/api/admin/registrations/${r4.id}`), 404);
+});
+
+test('meal times: shown to everyone, editable, validated', async () => {
+  const me = ok(await p[0].get('/api/me'));
+  assert.deepEqual(me.event.meals.map((m) => m.title), ['Breakfast', 'Lunch', 'Dinner']);
+  status(await admin.put('/api/admin/settings', { meals: [{ start: 'nope', end: 'x', title: 'A' }] }), 400);
+  status(await admin.put('/api/admin/settings', { meals: [{ start: '2026-11-06T15:00:00-05:00', end: '2026-11-06T14:00:00-05:00', title: 'Snacks' }] }), 400, 'ends before it starts');
+  status(await admin.put('/api/admin/settings', { meals: [{ start: '2026-11-06T15:00:00-05:00', end: '2026-11-06T15:15:00-05:00', title: '' }] }), 400, 'needs a title');
+  status(await p[0].put('/api/admin/settings', { meals: [] }), 403);
+  const meals = [...me.event.meals, { start: '2026-11-06T15:00:00-05:00', end: '2026-11-06T15:15:00-05:00', title: 'Snacks', detail: 'Hallway' }];
+  ok(await admin.put('/api/admin/settings', { meals }));
+  assert.deepEqual(ok(await p[0].get('/api/me')).event.meals.map((m) => m.title), ['Breakfast', 'Lunch', 'Snacks', 'Dinner']);
+  ok(await admin.put('/api/admin/settings', { meals: me.event.meals }));
+});
+
+test('in-browser runner files: isolated frame, public assets only', async () => {
+  const f = await admin.req('GET', '/runner/frame.html', undefined, { raw: true });
+  assert.equal(f.status, 200);
+  assert.equal(f.headers.get('x-frame-options'), 'SAMEORIGIN');
+  assert.match(f.headers.get('content-security-policy'), /frame-ancestors 'self'/);
+  assert.match(f.headers.get('content-security-policy'), /default-src 'none'/);
+  const page = await admin.req('GET', '/', undefined, { raw: true });
+  assert.equal(page.headers.get('x-frame-options'), 'DENY');
+  assert.equal(page.headers.get('access-control-allow-origin'), null);
+  const py = await admin.req('GET', '/vendor/pyodide/pyodide.js', undefined, { raw: true });
+  assert.equal(py.status, 200);
+  assert.equal(py.headers.get('access-control-allow-origin'), '*');
+  const wasm = await fetch(BASE + '/vendor/pyodide/pyodide.asm.wasm', { method: 'HEAD' });
+  assert.equal(wasm.headers.get('content-type'), 'application/wasm');
+  const apiRes = await admin.req('GET', '/api/me', undefined, { raw: true });
+  assert.equal(apiRes.headers.get('access-control-allow-origin'), null, 'the API never allows other origins');
+  const pre = await fetch(BASE + '/api/chat/general', { method: 'OPTIONS', headers: { Origin: 'null', 'Access-Control-Request-Method': 'POST', 'Access-Control-Request-Headers': 'x-hak' } });
+  assert.equal(pre.headers.get('access-control-allow-origin'), null, 'no CORS approval for the sandbox origin');
+});
+
 test('workspace files, conflicts, access', async () => {
   const list = ok(await p[0].get(`/api/workspace/${teamA.id}/files`));
   assert.ok(list.files.some((f) => f.path === 'main.py'), 'starter files');

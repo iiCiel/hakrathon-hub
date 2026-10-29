@@ -40,7 +40,8 @@ export function render(route) {
     h('button', { class: 'btn lg', type: 'submit', style: { width: '100%' } }, 'Sign in'),
     state.github ? [h('div', { class: 'faint', style: { textAlign: 'center', margin: '12px 0' } }, 'or'),
       h('a', { class: 'btn secondary', href: '/api/auth/github/start?mode=login', style: { width: '100%' } }, 'Sign in with GitHub')] : null,
-    h('p', { class: 'faint', style: { marginTop: '14px' } }, 'Forgot your password? Ask at the check-in desk or tech help; staff can reset it.'));
+    h('p', { class: 'faint', style: { marginTop: '14px' } }, 'Forgot your password? Ask at the check-in desk or tech help; staff can reset it.'),
+    h('p', { class: 'reg-cta' }, 'Not registered for the event yet? ', h('a', { href: '#/register' }, 'Register for HAkrathon')));
     return form;
   }
 
