@@ -1,4 +1,4 @@
-import { h, clear, toast, initials, fmtCountdown, fmtTime, ROLE_LABEL } from './ui.js';
+import { h, clear, toast, initials, fmtCountdown, fmtTime, ROLE_LABEL, richText } from './ui.js';
 import { api, ApiError } from './api.js';
 
 export const state = { me: null, team: null, event: null, runner: null, github: false, offset: 0, socket: null };
@@ -169,7 +169,7 @@ function connectSocket() {
   state.socket = s;
   s.on('connect_error', (e) => { if (e.message === 'unauthorized') { s.disconnect(); state.socket = null; } });
   s.on('announce', (m) => {
-    toast(h('div', null, h('b', null, 'Announcement · '), m.body.length > 240 ? m.body.slice(0, 240) + '…' : m.body), 'announce', 15000);
+    toast(h('div', null, h('b', null, 'Announcement · '), h('span', null, richText(m.body.length > 240 ? m.body.slice(0, 240) + '…' : m.body))), 'announce', 15000);
   });
   s.on('chat:message', (m) => {
     noteLatest(m.channel, m.id);
@@ -188,7 +188,18 @@ function connectSocket() {
       if (ev !== 'team:update' && JSON.stringify([state.me, state.team && state.team.id, state.event]) !== before && ev === 'me:update') route();
     });
   }
-  s.on('connect', () => { dispatch('reconnect', {}); });
+  // After the first connect, a connect means we were cut off (Wi-Fi, ngrok, server restart): events
+  // sent meanwhile were missed, so refresh the basics and let the open page catch up.
+  let connectedBefore = false;
+  s.on('connect', async () => {
+    if (connectedBefore) {
+      await loadMe().catch(() => {});
+      renderChrome();
+      for (const ev of ['event:update', 'team:update', 'help:update', 'submission:update']) dispatch(ev, { resync: true });
+    }
+    connectedBefore = true;
+    dispatch('reconnect', {});
+  });
   // The server drops sockets on password change/reset, logout and disable, and Socket.IO does not
   // retry after that. Start a fresh one if the session is still good.
   s.on('disconnect', (reason) => {

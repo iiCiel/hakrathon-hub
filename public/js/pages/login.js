@@ -12,7 +12,7 @@ const RULES = [
 
 export function render(route) {
   let mode = route.query.get('register') ? 'register' : 'login';
-  const ERRORS = { gh_expired: 'GitHub sign-in expired. Try again.', gh_denied: 'GitHub did not approve the sign-in.', gh_profile: 'Could not read your GitHub profile.',
+  const ERRORS = { gh_expired: 'GitHub sign-in expired. Try again.', gh_cancel: 'GitHub sign-in was cancelled.', gh_denied: 'GitHub did not approve the sign-in.', gh_profile: 'Could not read your GitHub profile.',
     gh_signin: 'Sign in first, then link GitHub.', gh_nolink: 'No HAkrathon account is linked to that GitHub account. Register with your access code, then link GitHub from your profile.',
     disabled: 'This account is disabled. Ask event staff.', gh_failed: 'GitHub sign-in failed. Try again or use your email and password.' };
   const err = ERRORS[route.query.get('error')] || (route.query.get('error') ? 'Sign-in failed. Try again.' : '');

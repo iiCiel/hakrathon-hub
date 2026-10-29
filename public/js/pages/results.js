@@ -1,10 +1,12 @@
 import { h, badge } from '../ui.js';
 import { api } from '../api.js';
-import { state, role } from '../app.js';
+import { state, role, on, route } from '../app.js';
 
 const ICON = { champion: '🏆', ai: '🤖', creative: '💡', practical: '🛠' };
 
 export async function render() {
+  let once = false;
+  on('event:update', () => { if (!once) { once = true; route(); } }); // results published while the page is open
   const d = await api.get('/api/results');
   if (!d.published && role() !== 'admin') return h('div', { class: 'card empty' }, h('div', { class: 'big' }, '⏳'), 'Results are announced at the awards ceremony.');
   const champion = d.awards.find((a) => a.id === 'champion');

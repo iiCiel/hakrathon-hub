@@ -1,4 +1,4 @@
-import { h, clear, toast, fmtTime, fmtDur, badge } from '../ui.js';
+import { h, clear, toast, fmtTime, fmtDur, badge, modal } from '../ui.js';
 import { api } from '../api.js';
 import { on, role, go } from '../app.js';
 import { submissionView } from '../components.js';
@@ -20,9 +20,21 @@ export async function render(route) {
     clear(root, h('div', { class: 'page-head' }, h('div', null, h('h1', null, d.team.name), h('p', null, 'Submission package'))), h('div', { class: 'split' }, main, side));
   };
   await draw();
-  on('submission:update', draw);
+  // Don't yank the page out from under a judge who is watching the video, reading a file or has run
+  // the code: offer a refresh instead.
+  const inUse = () => [...root.querySelectorAll('video')].some((v) => v.currentTime > 0)
+    || root.querySelector('pre.output[data-ran], textarea:focus, input:focus') || root.querySelector('.tree .node.on:not([data-readme])');
+  let banner = null;
+  const update = () => {
+    if (!inUse()) { banner = null; return draw(); }
+    if (banner && banner.isConnected) return;
+    banner = h('div', { class: 'card row', role: 'status', style: { borderColor: 'var(--gold)', marginBottom: '12px', position: 'sticky', top: '8px', zIndex: 6 } },
+      h('b', null, 'This package was just updated.'), h('span', { class: 'spacer' }), h('button', { class: 'btn sm', onclick: () => { banner = null; draw(); } }, 'Show the update'));
+    root.prepend(banner);
+  };
+  on('submission:update', update);
   // Staff aren't in the team's room; they hear about this team's changes on the staff channel.
-  on('staff:update', (ev) => { if (ev && ev.kind === 'submission' && ev.teamId === teamId && !root.querySelector('textarea:focus, input:focus')) draw(); });
+  on('staff:update', (ev) => { if (ev && ev.kind === 'submission' && ev.teamId === teamId) update(); });
   return root;
 }
 
@@ -51,9 +63,16 @@ async function validationCard(teamId, s) {
         } catch (e) { toast(e.message, 'bad'); }
       } }, 'Save'),
       s.repo_url ? h('button', { class: 'btn secondary', onclick: async (e) => {
-        e.target.disabled = true;
-        try { await api.post(`/api/admin/snapshot/${teamId}`); toast('Repository re-snapshotted.', 'ok'); } catch (ex) { toast(ex.message, 'bad'); }
-        e.target.disabled = false;
+        const btn = e.currentTarget;
+        const useTok = h('input', { type: 'checkbox' });
+        const go = await modal('Re-snapshot repository?', h('div', null,
+          h('p', null, 'Clone ', h('code', null, s.repo_url), ' again', s.frozen ? ' (last commit before this team’s build freeze).' : '.'),
+          h('label', { class: 'check' }, useTok, h('span', null, 'Use the server’s GitHub token (only if this is the team’s own private repo and you checked the owner)'))),
+          [{ label: 'Cancel', value: false, class: 'ghost' }, { label: 'Re-snapshot', value: true }]);
+        if (!go) return;
+        btn.disabled = true;
+        try { await api.post(`/api/admin/snapshot/${teamId}`, { use_token: useTok.checked }); toast('Repository re-snapshotted.', 'ok'); } catch (ex) { toast(ex.message, 'bad'); }
+        btn.disabled = false;
       } }, 'Re-snapshot repo') : null),
     h('p', { class: 'faint', style: { marginTop: '8px' } }, 'Broken links may be fixed only by changing access permissions, not the underlying work.'));
 }

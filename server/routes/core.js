@@ -311,18 +311,22 @@ r.get('/auth/github/start', wrap((req, res) => {
   const mode = req.query.mode === 'link' ? 'link' : 'login';
   if (mode === 'link') A.requireUser(req);
   const state = crypto.randomBytes(16).toString('hex');
-  res.append('Set-Cookie', `hak_gh=${state}.${mode}; Path=/; HttpOnly; SameSite=Lax; Max-Age=600`);
+  res.append('Set-Cookie', `hak_gh=${state}.${mode}; Path=/; HttpOnly; SameSite=Lax; Max-Age=600${secureReq(req) ? '; Secure' : ''}`);
   const base = (process.env.PUBLIC_URL || `${req.protocol}://${req.get('host')}`).replace(/\/$/, '');
   const q = new URLSearchParams({ client_id: process.env.GITHUB_CLIENT_ID, redirect_uri: `${base}/api/auth/github/callback`, state, scope: 'read:user', allow_signup: 'true' });
   res.redirect(`https://github.com/login/oauth/authorize?${q}`);
 }));
 
+const secureReq = (req) => req.secure || /^https:/i.test(process.env.PUBLIC_URL || '');
 r.get('/auth/github/callback', async (req, res) => {
-  const fail = (code) => res.redirect(`/#/login?error=${code}`);
+  if (!githubEnabled()) return res.status(404).send('GitHub sign-in is not set up on this server.');
+  const cookie = A.parseCookies(req.headers.cookie).hak_gh || '';
+  const [state, mode] = cookie.split('.');
+  // Someone already signed in (linking from their profile) goes back to the profile with the reason.
+  const fail = (code) => res.redirect(mode === 'link' || req.user ? `/#/profile?error=${code}` : `/#/login?error=${code}`);
   try {
-    const cookie = A.parseCookies(req.headers.cookie).hak_gh || '';
-    const [state, mode] = cookie.split('.');
-    res.append('Set-Cookie', 'hak_gh=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0');
+    res.append('Set-Cookie', `hak_gh=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secureReq(req) ? '; Secure' : ''}`);
+    if (req.query.error) return fail(req.query.error === 'access_denied' ? 'gh_cancel' : 'gh_denied');
     if (!state || state !== req.query.state || !req.query.code) return fail('gh_expired');
     const tokRes = await fetch('https://github.com/login/oauth/access_token', {
       method: 'POST', headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
@@ -336,7 +340,7 @@ r.get('/auth/github/callback', async (req, res) => {
     if (mode === 'link') {
       if (!req.user) return fail('gh_signin');
       const other = get('SELECT id FROM users WHERE github_id = ? AND id != ?', ghId, req.user.id);
-      if (other) return res.redirect('/#/profile?error=' + 'gh_taken');
+      if (other) return fail('gh_taken');
       run('UPDATE users SET github_id = ?, github_login = ? WHERE id = ?', ghId, gu.login, req.user.id);
       return res.redirect('/#/profile?linked=1');
     }

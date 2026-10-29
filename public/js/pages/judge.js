@@ -1,6 +1,6 @@
 import { h, clear, field, toast, busy, badge, confirmBox, promptBox } from '../ui.js';
 import { api } from '../api.js';
-import { on, role, go, laneName } from '../app.js';
+import { on, role, go, laneName, now, freezeAt, route } from '../app.js';
 import { submissionView } from '../components.js';
 
 export async function render(route) {
@@ -42,8 +42,12 @@ async function listPage() {
               } }, t.conflict ? 'Undo conflict' : 'Conflict')) : h('a', { class: 'btn sm secondary', href: `#/review/${t.id}` }, 'View'))))))),
         h('aside', { class: 'stack sticky' }, rubricCard(d))));
   };
-  await draw();
-  on('event:update', draw);
+  let lastDraw = Date.now(), waiting = true;
+  const draw2 = async () => { lastDraw = Date.now(); await draw(); waiting = !!root.querySelector('[title^="Submissions open to judges"]'); };
+  await draw2();
+  on('event:update', draw2);
+  // Teams freeze on the clock (some with extensions): refresh while any is still building.
+  on('tick', (t) => { if (waiting && t >= freezeAt() && Date.now() - lastDraw > 10000) draw2(); });
   return root;
 }
 
@@ -55,11 +59,17 @@ function rubricCard(d) {
     h('p', { class: 'faint', style: { marginTop: '10px' } }, 'Each criterion is scored 1–10, divided by 10 and multiplied by its weight. Notes should cite observable evidence: one strength, one question or risk, one next step.'));
 }
 
+let lastScoreRetry = 0;
 async function scorecardPage(teamId) {
   let ov, sub, mine;
   try { [ov, sub, mine] = await Promise.all([api.get('/api/judge/overview'), api.get(`/api/submissions/${teamId}`), api.get(`/api/judge/scores/${teamId}`)]); }
   catch (e) {
     if (e.status !== 403 && e.status !== 404) throw e;
+    // "Still building": try again by itself after the freeze (every 15 s while it's still closed).
+    let retried = false;
+    const again = () => { if (retried || Date.now() - lastScoreRetry < 15000) return; retried = true; lastScoreRetry = Date.now(); route(); };
+    on('tick', (t) => { if (t >= freezeAt() + 2000) again(); });
+    on('event:update', again);
     return h('div', { class: 'empty' }, h('div', { class: 'big', 'aria-hidden': 'true' }, '⏳'), h('p', null, e.message), h('a', { class: 'btn secondary', href: '#/judge' }, '← All teams'));
   }
   const crit = ov.criteria;
@@ -143,6 +153,12 @@ async function scorecardPage(teamId) {
     h('div', { class: 'row end' }, draftBtn, submitBtn),
     h('details', { style: { marginTop: '12px' } }, h('summary', { class: 'faint', style: { cursor: 'pointer' } }, 'Score anchors'), h('div', { class: 'anchors', style: { marginTop: '6px' } }, ov.anchors.map((a) => h('div', null, h('b', null, a.range), h('span', null, a.text))))));
 
+  // Judging opened/closed, Q&A, results: reload a locked card; warn on one being filled in.
+  on('event:update', async () => {
+    const o = await api.get('/api/judge/overview').catch(() => null);
+    if (!o || (o.judging_open === ov.judging_open && o.finalists_open === ov.finalists_open && o.results_published === ov.results_published)) return;
+    if (locked) route(); else toast('Judging status changed. Save what you have, then reload this page.', '', 10000);
+  });
   return h('div', null,
     h('div', { class: 'page-head' }, h('div', null, h('a', { href: '#/judge', class: 'faint' }, '← All teams'), h('h1', null, sub.team.name), h('p', null, sub.submission.project_title || 'Untitled project'))),
     h('div', { class: 'split wide-side' }, submissionView(sub.team, sub.submission, sub), h('aside', { class: 'stack sticky', style: { maxHeight: 'calc(100vh - 90px)', overflowY: 'auto' } }, adjPanel, scoreCard)));

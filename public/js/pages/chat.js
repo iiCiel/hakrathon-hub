@@ -39,9 +39,25 @@ export async function render(route) {
           h('span', { title: fmtDateTime(m.created_at) }, fmtTime(m.created_at)), m.pinned ? h('span', null, '📌') : null, h('span', { class: 'spacer' }), tools),
         h('div', { class: 'body' }, m.deleted ? 'Message deleted' : richText(m.body)), cont ? h('div', { class: 'meta' }, h('span', { class: 'spacer' }), tools) : null));
   };
+  // Channels keep everything; the page loads the latest 100 and fetches older ones on demand.
+  let hasMore = false, loadingOlder = false;
+  const loadOlder = async () => {
+    if (loadingOlder || !hasMore || !messages.length) return;
+    loadingOlder = true;
+    const h0 = list.scrollHeight, top0 = list.scrollTop;
+    const d = await api.get(`/api/chat/${encodeURIComponent(current)}?before=${messages[0].id}`).catch((e) => { toast(e.message, 'bad'); return null; });
+    loadingOlder = false;
+    if (!d) return;
+    hasMore = d.messages.length >= 100;
+    messages = d.messages.filter((m) => !messages.some((x) => x.id === m.id)).concat(messages);
+    drawMsgs(false);
+    list.scrollTop = list.scrollHeight - h0 + top0; // keep the reader where they were
+  };
+  list.addEventListener('scroll', () => { if (list.scrollTop < 40) loadOlder(); });
   const drawMsgs = (stick = true) => {
     const atBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 80;
-    clear(list, messages.length ? messages.map((m, i) => msgNode(m, messages[i - 1])) : h('div', { class: 'empty' }, h('div', { class: 'big' }, '💬'), `No messages in ${chan.name} yet.`));
+    clear(list, hasMore ? h('button', { class: 'btn ghost sm', style: { display: 'block', margin: '6px auto' }, onclick: loadOlder }, 'Load older messages') : null,
+      messages.length ? messages.map((m, i) => msgNode(m, messages[i - 1])) : h('div', { class: 'empty' }, h('div', { class: 'big' }, '💬'), `No messages in ${chan.name} yet.`));
     if (stick || atBottom) list.scrollTop = list.scrollHeight;
     pins.hidden = !pinned.length;
     clear(pins, pinned.map((p) => h('div', null, '📌 ', h('b', null, p.user.name, ': '), p.body.length > 200 ? p.body.slice(0, 200) + '…' : p.body)));
@@ -58,7 +74,7 @@ export async function render(route) {
   };
   const load = async () => {
     const d = await api.get(`/api/chat/${encodeURIComponent(current)}`);
-    messages = d.messages; pinned = d.pinned;
+    messages = d.messages; pinned = d.pinned; hasMore = d.messages.length >= 100;
     drawMsgs(true);
     drawSide();
   };

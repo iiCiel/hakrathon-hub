@@ -6,7 +6,9 @@ export async function render(route) {
   await loadMe();
   const u = state.me;
   if (route.query.get('linked')) toast('GitHub linked.', 'ok');
-  if (route.query.get('error')) toast(route.query.get('error') === 'gh_taken' ? 'That GitHub account is linked to another user.' : 'Linking GitHub failed. Try again.', 'bad');
+  const GH_ERR = { gh_taken: 'That GitHub account is already linked to another user.', gh_cancel: 'Linking was cancelled on GitHub.', gh_expired: 'The GitHub link request expired. Try again.',
+    gh_denied: 'GitHub did not approve the link.', gh_profile: 'Could not read your GitHub profile. Try again.' };
+  if (route.query.get('error')) toast(GH_ERR[route.query.get('error')] || 'Linking GitHub failed. Try again.', 'bad', 8000);
   const info = h('form', { class: 'card', onsubmit: async (e) => {
     e.preventDefault();
     const btn = info.querySelector('button[type=submit]');

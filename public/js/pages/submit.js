@@ -11,7 +11,7 @@ export async function render() {
 
   const load = async () => { data = await api.get('/api/submission'); draw(); };
   const draw = () => clear(root, view());
-  on('submission:update', () => { if (!dirtyForm) load(); else toast('A teammate saved part of the package. When you save, only the fields you changed are sent, so their work is kept.', '', 8000); });
+  on('submission:update', (ev) => { if (!dirtyForm) load(); else if (!(ev && ev.resync)) toast('A teammate saved part of the package. When you save, only the fields you changed are sent, so their work is kept.', '', 8000); });
   // Registered once (view() runs on every redraw). An extension or freeze changes what can be edited.
   let tickFn = null;
   on('tick', (t) => tickFn && tickFn(t));
@@ -64,10 +64,14 @@ export async function render() {
       h('b', null, 'Unsaved changes'), h('span', { class: 'spacer' }), saveBtn);
 
     // ---------- repo ----------
-    const repoInput = h('input', { type: 'url', 'aria-label': 'GitHub repository URL', value: s.repo_url, disabled: locked, placeholder: 'https://github.com/your-team/project' });
+    const repoInput = h('input', { type: 'text', inputmode: 'url', autocomplete: 'off', spellcheck: 'false', 'aria-label': 'GitHub repository URL', value: s.repo_url, disabled: locked, placeholder: 'https://github.com/your-team/project' });
     const snapBtn = h('button', { class: 'btn', disabled: locked, onclick: async () => {
       busy(snapBtn, true, 'Cloning…');
-      try { data.submission = (await api.post('/api/submission/repo', { repo_url: repoInput.value })).submission; toast('Snapshot saved. Judges will see this commit.', 'ok'); draw(); }
+      try {
+        const r = await api.post('/api/submission/repo', { repo_url: repoInput.value });
+        data.submission = r.submission; toast('Snapshot saved. Judges will see this commit.', 'ok'); draw();
+        if (r.skipped && r.skipped.length) leftOut(r.skipped, 'The rest of the repository was saved. Judges won’t see these files on the event computer; rename them on GitHub and snapshot again if they matter:');
+      }
       catch (e) { toast(e.message, 'bad'); busy(snapBtn, false); }
     } }, s.repo_sha ? 'Update snapshot' : 'Link & snapshot');
 
@@ -78,22 +82,20 @@ export async function render() {
       input.addEventListener('change', async () => {
         const file = input.files[0];
         if (!file) return;
+        const maxMb = LIMIT_MB[kind];
+        if (maxMb && file.size > maxMb * 1024 * 1024) { toast(`That file is ${Math.round(file.size / 1048576)} MB. The limit is ${maxMb} MB.`, 'bad', 8000); input.value = ''; return; }
         const extra = {};
         if (kind === 'video') {
           const secs = await videoDuration(file);
           if (secs) extra.seconds = String(secs);
+          if (!secs && !(await confirmBox('This browser can’t play that video', 'Its length couldn’t be read, which usually means judges’ browsers can’t play it either (common with iPhone HEVC .mov files). Export it as an H.264 MP4 if you can, or upload it anyway and check the preview.', 'Upload anyway'))) { input.value = ''; return; }
           if (secs > state.event.max_video_seconds + 0.5 && !(await confirmBox('Video is over 5:00', `This video is ${fmtDur(secs)}. Judges stop watching at 5:00. Upload anyway?`, 'Upload anyway'))) { input.value = ''; return; }
         }
         bar.hidden = false; btn.disabled = true;
         try {
           const r = await upload(`/api/submission/${kind}`, file, extra, (p) => { bar.firstChild.style.width = `${Math.round(p * 100)}%`; });
           data.submission = r.submission; toast('Uploaded.', 'ok'); if (after) after(); draw();
-          if (r.skipped && r.skipped.length) {
-            modal(`${r.skipped.length} file${r.skipped.length === 1 ? ' was' : 's were'} left out`, h('div', null,
-              h('p', null, 'The rest of the zip was saved. These files can’t be stored on the event computer, so judges won’t see them. Rename them and upload again if they matter:'),
-              h('ul', { style: { maxHeight: '240px', overflow: 'auto' } }, r.skipped.slice(0, 50).map((x) => h('li', null, h('code', null, x.path), ` — ${x.why}`))),
-              r.skipped.length > 50 ? h('p', { class: 'faint' }, `…and ${r.skipped.length - 50} more.`) : null), [{ label: 'OK', value: true }]);
-          }
+          if (r.skipped && r.skipped.length) leftOut(r.skipped, 'The rest of the zip was saved. These files can’t be stored on the event computer, so judges won’t see them. Rename them and upload again if they matter:');
         } catch (e) { toast(e.message, 'bad'); bar.hidden = true; btn.disabled = false; }
         input.value = '';
       });
@@ -112,9 +114,9 @@ export async function render() {
       field('Project title', title),
       h('div', null, h('b', null, 'GitHub repository'), h('div', { class: 'faint', style: { margin: '2px 0 6px' } }, 'Must be public (or shared with staff). We take an official snapshot automatically at build freeze; you can snapshot any time before then to check it works.'),
         h('div', { class: 'row', style: { flexWrap: 'nowrap' } }, repoInput, snapBtn),
-        s.repo_sha ? h('div', { class: 'faint', style: { marginTop: '6px' } }, tick(true), ' Snapshot ', h('code', null, s.repo_sha.slice(0, 10)), ` · ${s.repo_branch} · captured ${fmtAgo(s.repo_snapshot_at, now())}`, ' ', s.repo_official ? badge('Official freeze snapshot', 'ok') : null, ' ', remover('repo', 'repository')) : null,
+        s.repo_sha ? h('div', { class: 'faint', style: { marginTop: '6px' } }, tick(true), ' Snapshot ', h('code', null, s.repo_sha.slice(0, 10)), ` · ${s.repo_branch} · captured ${fmtAgo(s.repo_snapshot_at, now())}`, ' ', s.repo_official ? badge('Official freeze snapshot', 'ok') : s.repo_after_freeze ? badge('No commit before the freeze', 'bad') : null, ' ', remover('repo', 'repository')) : null,
         s.repo_error ? h('div', { class: 'badge bad', style: { whiteSpace: 'normal', marginTop: '6px', display: 'block', padding: '6px 10px' } }, s.repo_error) : null),
-      h('div', null, h('b', null, 'Or upload a zip'), h('div', { class: 'faint', style: { margin: '2px 0 6px' } }, 'Up to 100 MB. Leave out node_modules, venv and build folders.'),
+      h('div', null, h('b', null, 'Or upload a zip'), h('div', { class: 'faint', style: { margin: '2px 0 6px' } }, 'Up to 100 MB (300 MB unpacked). Leave out venv and build folders. The sandbox has no internet, so a Node project only runs if node_modules is included; otherwise give judges a live link.'),
         s.zip_name ? h('div', { class: 'faint', style: { marginBottom: '6px' } }, tick(true), ` ${s.zip_name} · ${fmtDateTime(s.zip_at)} `, remover('zip', 'zip')) : null,
         uploader('zip', '.zip', s.zip_name ? 'Replace zip' : 'Upload .zip')),
       field('Live link (optional)', protoUrl, 'Deployed site, Power BI / Tableau dashboard, Colab notebook, Power Automate flow, etc. Test it from a non-team account.'),
@@ -153,7 +155,17 @@ export async function render() {
     const countdown = h('b', { style: { fontFamily: 'var(--mono)', fontSize: '1.4rem', color: 'var(--gold-ink)' } });
     const tickDown = (t) => { countdown.textContent = t >= fz ? 'Locked' : fmtCountdownSafe(fz - t); };
     tickDown(now());
-    tickFn = (t) => { tickDown(t); if (t >= fz && s.canEdit && !locked) { locked = true; if (!dirtyForm) load(); } };
+    let autoSaved = false;
+    tickFn = (t) => {
+      tickDown(t);
+      // Unsaved edits a few seconds before the freeze: save them rather than lose them.
+      if (dirtyForm && !locked && !autoSaved && t < fz && fz - t < 5000) { autoSaved = true; saveBtn.click(); toast('Build freeze is seconds away: saving your changes now.', '', 6000); }
+      if (t >= fz && s.canEdit && !locked) {
+        locked = true;
+        if (!dirtyForm) load();
+        else { for (const el of root.querySelectorAll('input, textarea, select, button')) el.disabled = true; toast('Build freeze passed: this page is now read-only.', 'bad', 10000); }
+      }
+    };
     const logBox = h('div', { class: 'faint', style: { fontSize: '.82rem', maxHeight: '220px', overflowY: 'auto' } });
     api.get(`/api/submissions/${state.team.id}/log`).then((d) => clear(logBox, d.log.slice(0, 40).map((l) => h('div', { style: { padding: '3px 0', borderBottom: '1px dashed var(--line)' } }, `${fmtTime(l.created_at)} · ${l.name || 'system'} · ${l.action}${l.detail ? ` · ${l.detail}` : ''}`)))).catch(() => {});
 
@@ -179,6 +191,13 @@ export async function render() {
   return root;
 }
 
+function leftOut(list, intro) {
+  modal(`${list.length} file${list.length === 1 ? ' was' : 's were'} left out`, h('div', null,
+    h('p', null, intro),
+    h('ul', { style: { maxHeight: '240px', overflow: 'auto' } }, list.slice(0, 50).map((x) => h('li', null, h('code', null, x.path), ` — ${x.why}`))),
+    list.length > 50 ? h('p', { class: 'faint' }, `…and ${list.length - 50} more.`) : null), [{ label: 'OK', value: true }]);
+}
+const LIMIT_MB = { zip: 100, video: 500, brief: 15, fallback: 100 };
 function status(s, id) {
   const i = s.completeness.items.find((x) => x.id === id);
   return i && i.ok ? badge(i.warn ? 'Check length' : 'Done', i.warn ? 'warn' : 'ok') : badge('Missing', 'bad');

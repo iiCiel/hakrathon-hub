@@ -40,6 +40,13 @@ async function participantView() {
       h('label', { style: { display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 12px', cursor: 'pointer' } }, h('input', { type: 'radio', name: 'kind', value: k, checked: i === 0 }), v)))),
   field('What do you need?', h('textarea', { name: 'summary', required: true, maxlength: 500, placeholder: 'e.g. Our Flask app can’t read the CSV after deploying — getting a FileNotFoundError.' })),
   h('button', { class: 'btn', type: 'submit' }, 'Request mentor'));
+  // Build freeze passing while the page is open closes the form (what was typed stays visible).
+  on('tick', () => {
+    if (!frozen() || form.tagName !== 'FORM' || !form.isConnected || form.dataset.closed) return;
+    form.dataset.closed = '1';
+    for (const el of form.elements) el.disabled = true;
+    form.prepend(h('p', { class: 'badge bad', style: { display: 'block', whiteSpace: 'normal', marginBottom: '10px' } }, 'Mentor requests closed at build freeze. Ask event staff at the help desk.'));
+  });
   return h('div', null,
     h('div', { class: 'page-head' }, h('div', null, h('h1', null, 'Mentors'), h('p', null, `Table ${state.team.table_no || '—'} · requests go to every mentor on duty.`))),
     h('div', { class: 'split' }, form, h('aside', { class: 'card' }, h('h2', null, 'Your team’s requests'), listEl)));

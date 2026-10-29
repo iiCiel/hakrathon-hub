@@ -1,6 +1,6 @@
 import { h, clear, fmtTime, fmtCountdown, fmtAgo, richText, tick, badge } from '../ui.js';
 import { api } from '../api.js';
-import { state, now, on, role, freezeAt, laneName } from '../app.js';
+import { state, now, on, role, freezeAt, laneName, route } from '../app.js';
 
 function currentStage(schedule, t) {
   const list = schedule.map((s) => ({ ...s, s: new Date(s.start).getTime(), e: new Date(s.end).getTime() }));
@@ -46,6 +46,15 @@ export async function render() {
   let annMsgs = ann.messages.filter((m) => !m.deleted);
   drawAnn(annMsgs);
   on('chat:message', (m) => { if (m.channel === 'announcements') { annMsgs.push(m); drawAnn(annMsgs); } });
+  // Deleted/pinned announcements, a new table number, the challenge release: redraw (the page has no inputs).
+  on('chat:update', async (u) => {
+    if (u && u.channel && u.channel !== 'announcements') return;
+    const d = await api.get('/api/chat/announcements').catch(() => null);
+    if (d) { annMsgs = d.messages.filter((m) => !m.deleted); drawAnn(annMsgs); }
+  });
+  let redrawing = false;
+  const redraw = () => { if (!redrawing) { redrawing = true; route(); } };
+  on('team:update', redraw); on('event:update', redraw);
 
   const hero = h('section', { class: 'hero' },
     h('div', { class: 'kicker' }, (() => {

@@ -149,7 +149,11 @@ export function highlightCode(code, path) {
   const lang = map[ext] || ext;
   const c = h('code', { class: 'hljs' });
   try {
-    if (window.hljs && code.length < 300000) c.innerHTML = hljs.getLanguage(lang) ? hljs.highlight(code, { language: lang }).value : hljs.highlightAuto(code).value;
+    if (window.hljs && code.length < 300000) {
+      if (hljs.getLanguage(lang)) c.innerHTML = hljs.highlight(code, { language: lang }).value;
+      else if (code.length < 20000 && !['txt', 'csv', 'tsv', 'log'].includes(ext)) c.innerHTML = hljs.highlightAuto(code).value; // guessing is slow on big files
+      else c.textContent = code;
+    }
     else c.textContent = code;
   } catch { c.textContent = code; }
   return c;

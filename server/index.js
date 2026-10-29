@@ -77,6 +77,10 @@ app.use((err, req, res, _next) => {
 
 // ---------- realtime ----------
 const server = http.createServer(app);
+// Node cuts off any request still running after 5 minutes by default. A 300–500 MB demo video over
+// busy Wi-Fi or ngrok can take longer than that, so uploads get an hour; headers must still arrive fast.
+server.requestTimeout = 60 * 60 * 1000;
+server.headersTimeout = 60 * 1000;
 // WebSocket upgrades ignore CORS, so check Origin ourselves: only pages served by this portal may connect.
 const io = new Server(server, {
   serveClient: true, maxHttpBufferSize: 1e5, cors: { origin: false },
@@ -119,7 +123,7 @@ io.on('connection', (socket) => {
     const t = me && get('SELECT * FROM teams WHERE id = ?', Number(msg.teamId));
     if (!t || !canRead(me, t)) return;
     const p = typeof msg.path === 'string' ? msg.path.slice(0, 200) : '';
-    io.to(`team:${t.id}`).emit('presence', { user: { id: me.id, name: me.name }, path: p, at: Date.now() });
+    io.to([`team:${t.id}`, 'helpdesk']).emit('presence', { user: { id: me.id, name: me.name }, path: p, at: Date.now() });
   });
 });
 bus.disconnectToken = async (token) => {

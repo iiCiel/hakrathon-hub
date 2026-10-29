@@ -335,7 +335,7 @@ async function scoring() {
         h('div', { class: 'row', style: { marginTop: '12px' } }, h('a', { class: 'btn secondary', href: '#/results' }, 'Preview results page'))));
   };
   await draw();
-  on('staff:update', draw);
+  on('staff:update', draw); on('event:update', draw);
   return root;
 }
 

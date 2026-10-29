@@ -69,9 +69,19 @@ r.get('/workspace/:teamId/all', wrap((req) => {
   return { files: all('SELECT path, content, version FROM files WHERE team_id = ? ORDER BY path', t.id) };
 }));
 
+// Saves already on their way at the freeze moment (typed in the last seconds, a slow connection)
+// still land: edits to existing files are accepted for a few seconds after the team's freeze.
+const FREEZE_GRACE_MS = 5000;
 r.put('/workspace/:teamId/file', wrap((req) => {
-  const { u, t } = writable(req, req.params.teamId);
   const b = req.body || {};
+  let ctx;
+  try { ctx = writable(req, req.params.teamId); } catch (e) {
+    const u0 = req.user, t0 = e.status === 403 && u0 ? get('SELECT * FROM teams WHERE id = ?', Number(req.params.teamId)) : null;
+    const late = t0 && u0.team_id === t0.id && S.isFrozen(t0) && Date.now() - S.freezeAt(t0) < FREEZE_GRACE_MS && b.baseVersion !== undefined;
+    if (!late) throw e;
+    ctx = { u: u0, t: t0 };
+  }
+  const { u, t } = ctx;
   const p = runner.safeRel(b.path || '');
   if (!p) throw new HttpError(400, 'Use a simple file path like src/app.py (no "..").');
   const content = typeof b.content === 'string' ? b.content : '';
@@ -88,10 +98,13 @@ r.put('/workspace/:teamId/file', wrap((req) => {
     run('UPDATE files SET content = ?, version = version + 1, updated_by = ?, updated_at = ? WHERE team_id = ? AND path = ?', content, u.id, now(), t.id, p);
   } else {
     if (b.create === false) throw new HttpError(404, 'File not found.');
+    // An editor saving a file it already had (it sends the version it started from): the file was
+    // renamed or deleted meanwhile, so don't bring it back under the old name.
+    if (b.baseVersion !== undefined) throw new HttpError(409, 'A teammate renamed or deleted this file. Copy your changes into the file it became.');
     run('INSERT INTO files (team_id, path, content, updated_by, updated_at) VALUES (?,?,?,?,?)', t.id, p, content, u.id, now());
   }
   const f = get('SELECT path, version, updated_at FROM files WHERE team_id = ? AND path = ?', t.id, p);
-  bus.emit(`team:${t.id}`, 'file:update', { teamId: t.id, path: p, version: f.version, by: { id: u.id, name: u.name }, created: !existing });
+  bus.emit([`team:${t.id}`, 'helpdesk'], 'file:update', { teamId: t.id, path: p, version: f.version, by: { id: u.id, name: u.name }, created: !existing });
   return { file: f };
 }));
 
@@ -102,7 +115,7 @@ r.post('/workspace/:teamId/rename', wrap((req) => {
   if (!get('SELECT id FROM files WHERE team_id = ? AND path = ?', t.id, from)) throw new HttpError(404, 'File not found.');
   if (get('SELECT id FROM files WHERE team_id = ? AND path = ?', t.id, to)) throw new HttpError(409, 'A file with that name exists.');
   run('UPDATE files SET path = ?, version = version + 1, updated_by = ?, updated_at = ? WHERE team_id = ? AND path = ?', to, u.id, now(), t.id, from);
-  bus.emit(`team:${t.id}`, 'file:update', { teamId: t.id, path: to, from, renamed: true, by: { id: u.id, name: u.name } });
+  bus.emit([`team:${t.id}`, 'helpdesk'], 'file:update', { teamId: t.id, path: to, from, renamed: true, by: { id: u.id, name: u.name } });
   return { ok: true };
 }));
 
@@ -111,7 +124,7 @@ r.delete('/workspace/:teamId/file', wrap((req) => {
   const p = runner.safeRel(req.query.path || '');
   if (!p) throw new HttpError(400, 'Bad file name.');
   run('DELETE FROM files WHERE team_id = ? AND path = ?', t.id, p);
-  bus.emit(`team:${t.id}`, 'file:update', { teamId: t.id, path: p, deleted: true, by: { id: u.id, name: u.name } });
+  bus.emit([`team:${t.id}`, 'helpdesk'], 'file:update', { teamId: t.id, path: p, deleted: true, by: { id: u.id, name: u.name } });
   return { ok: true };
 }));
 

@@ -74,7 +74,7 @@ r.put('/admin/settings', wrap((req) => {
   if (s.team_min > s.team_max) { S.setSettings({ team_min: before.team_min, team_max: before.team_max }); throw new HttpError(400, 'Team minimum is larger than maximum.'); }
   // Moving the freeze later re-opens teams; their official snapshot must be re-taken at the new freeze.
   if ('build_freeze_at' in patch || 'global_extension_minutes' in patch) {
-    for (const t of all('SELECT * FROM teams')) if (!S.isFrozen(t)) run('UPDATE submissions SET repo_final = 0 WHERE team_id = ?', t.id);
+    for (const t of all('SELECT * FROM teams')) if (!S.isFrozen(t)) run("UPDATE submissions SET repo_final = 0, repo_freeze_head = '' WHERE team_id = ?", t.id);
   }
   audit(req.user.id, 'settings', Object.keys(patch));
   bus.emit('all', 'event:update', {});
@@ -197,7 +197,7 @@ r.patch('/admin/teams/:id', wrap((req) => {
     'table_no' in b ? str(b.table_no, { max: 10 }) : t.table_no, ext, t.id);
   if (ext !== t.extension_minutes) {
     const nt = get('SELECT * FROM teams WHERE id = ?', t.id);
-    if (!S.isFrozen(nt)) run('UPDATE submissions SET repo_final = 0 WHERE team_id = ?', t.id);
+    if (!S.isFrozen(nt)) run("UPDATE submissions SET repo_final = 0, repo_freeze_head = '' WHERE team_id = ?", t.id);
     run('INSERT INTO submission_log (team_id, user_id, action, detail) VALUES (?,?,?,?)', t.id, req.user.id, 'freeze.extension', `${ext} minutes`);
   }
   audit(req.user.id, 'team.update', { id: t.id, name, lane, ext });
@@ -236,7 +236,7 @@ r.put('/admin/validation/:teamId', wrap((req) => {
   return { validation: get('SELECT * FROM validations WHERE team_id = ?', t) };
 }));
 
-r.post('/admin/snapshot/:teamId', wrap(async (req) => { await adminSnapshot(Number(req.params.teamId), req.user.id); return { ok: true }; }));
+r.post('/admin/snapshot/:teamId', wrap(async (req) => { await adminSnapshot(Number(req.params.teamId), req.user.id, { useToken: !!(req.body || {}).use_token }); return { ok: true }; }));
 r.post('/admin/snapshot-all', wrap(async (req) => {
   const results = [];
   for (const t of all("SELECT t.id, t.name FROM teams t JOIN submissions s ON s.team_id = t.id WHERE s.repo_url != ''")) {

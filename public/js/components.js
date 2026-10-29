@@ -1,6 +1,6 @@
 import { h, clear, toast, highlightCode, fmtBytes, fmtDateTime, fmtTime, fmtDur, badge, tick } from './ui.js';
 import { api } from './api.js';
-import { state, laneName } from './app.js';
+import { state, laneName, role } from './app.js';
 
 // Browse a repo snapshot or extracted zip: file tree on the left, highlighted file or README on the right.
 export function sourceBrowser(teamId, kind) {
@@ -15,14 +15,15 @@ export function sourceBrowser(teamId, kind) {
       readmeHtml = d.readme;
       if (!d.tree) { clear(box, h('div', { class: 'empty', style: { gridColumn: '1 / -1' } }, 'Nothing uploaded yet.')); return; }
       // Files are plain buttons in a list (Tab/Enter/Space work); folders are labels. Up/Down also move.
-      clear(tree, h('button', { type: 'button', class: 'node on', 'aria-current': 'true', onclick: (e) => { select(e.currentTarget); showReadme(); } }, '📘 README'),
+      clear(tree, h('button', { type: 'button', class: 'node on', 'data-readme': '1', 'aria-current': 'true', onclick: (e) => { select(e.currentTarget); showReadme(); } }, '📘 README'),
         d.tree.map((n) => {
           const depth = n.path.split('/').length - 1;
           const name = n.path.split('/').pop();
           if (n.dir) return h('div', { class: 'node dir', style: { paddingLeft: `${8 + depth * 14}px` } }, h('span', { 'aria-hidden': 'true' }, '📁 '), name, '/', n.skipped ? h('span', { class: 'faint' }, ' (hidden)') : null);
           return h('button', { type: 'button', class: 'node', style: { paddingLeft: `${8 + depth * 14}px` }, title: `${n.path} · ${fmtBytes(n.size)}`, 'aria-label': n.path,
             onclick: (e) => { select(e.currentTarget); openFile(n.path); } }, name);
-        }));
+        }),
+        d.truncated ? h('div', { class: 'node faint' }, 'Only the first 5,000 files are listed.') : null);
       showReadme();
     } catch (e) { clear(view, h('div', { class: 'empty' }, e.message)); }
   })();
@@ -37,10 +38,13 @@ export function sourceBrowser(teamId, kind) {
     clear(view, h('div', { class: 'loading' }, h('span', { class: 'spinner' })));
     try {
       const { file } = await api.get(`/api/source/${teamId}/${kind}/file?path=${encodeURIComponent(p)}`);
-      if (file.tooLarge) return clear(view, h('div', { class: 'empty' }, `${p} is ${fmtBytes(file.size)} — too large to preview.`));
-      if (file.binary) return clear(view, h('div', { class: 'empty' }, `${p} is a binary file (${fmtBytes(file.size)}).`));
-      clear(view, h('div', { class: 'faint', style: { padding: '8px 14px', borderBottom: '1px solid var(--line)', fontFamily: 'var(--mono)' } }, `${p} · ${fmtBytes(file.size)} · ${file.text.split('\n').length} lines`),
-        h('pre', null, highlightCode(file.text, p)));
+      const dl = h('a', { class: 'btn secondary sm', href: `/api/source/${teamId}/${kind}/raw?path=${encodeURIComponent(p)}`, download: '' }, 'Download file');
+      if ((file.binary || file.tooLarge) && /\.(png|jpe?g|gif|webp)$/i.test(p)) return clear(view, h('div', { class: 'empty' }, h('img', { src: `/api/source/${teamId}/${kind}/raw?inline=1&path=${encodeURIComponent(p)}`, alt: p, style: { maxWidth: '100%', maxHeight: '520px' } }), h('p', null, dl)));
+      if (file.tooLarge) return clear(view, h('div', { class: 'empty' }, h('p', null, `${p} is ${fmtBytes(file.size)} — too large to preview.`), dl));
+      if (file.binary) return clear(view, h('div', { class: 'empty' }, h('p', null, `${p} can’t be shown as text (${fmtBytes(file.size)}). Open it on your computer:`), dl));
+      clear(view, h('div', { class: 'faint row', style: { padding: '8px 14px', borderBottom: '1px solid var(--line)', fontFamily: 'var(--mono)', gap: '10px', flexWrap: 'nowrap' } },
+        h('span', { style: { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, title: p }, `${p} · ${fmtBytes(file.size)} · ${file.notebook ? 'notebook cells (outputs hidden)' : `${file.text.split('\n').length} lines`}`), h('span', { class: 'spacer' }), dl),
+        h('pre', null, highlightCode(file.text, file.as || p)));
     } catch (e) { clear(view, h('div', { class: 'empty' }, e.message)); }
   }
   return box;
@@ -57,6 +61,7 @@ export function sourceRunner(teamId, kind, command, { allowEdit = true } = {}) {
     clear(out, h('span', { class: 'sys' }, `$ ${cmd.value}\n`), h('span', { class: 'spinner' }));
     try {
       const r = await api.post('/api/run/source', { teamId, kind, command: cmd.value, stdin: stdin.value });
+      out.dataset.ran = '1';
       clear(out, h('span', { class: 'sys' }, `$ ${cmd.value}\n`), r.stdout, r.stderr ? h('span', { class: 'err' }, r.stderr) : null, h('span', { class: 'sys' }, `\n[exit ${r.exitCode ?? '?'} · ${(r.durationMs / 1000).toFixed(2)} s]`));
     } catch (e) { clear(out, h('span', { class: 'err' }, e.message)); }
     btn.disabled = false;
@@ -82,7 +87,7 @@ export function submissionView(team, sub, { briefFields, disclosureFields }) {
   const proto = h('section', { class: 'card stack' }, h('h2', null, '1 · Working prototype'), linkRow('Live link:', s.prototype_url));
   if (s.repo_url) {
     proto.append(h('div', null, linkRow('Repository:', s.repo_url),
-      s.repo_sha ? h('div', { class: 'faint', style: { marginTop: '4px' } }, `Snapshot ${s.repo_official ? '(official, last commit before build freeze)' : s.frozen ? '(not the official freeze snapshot)' : ''}: `, h('code', null, s.repo_sha.slice(0, 10)), ` on ${s.repo_branch || 'default branch'} · last commit ${fmtDateTime(s.repo_commit_date)} · captured ${fmtDateTime(s.repo_snapshot_at)}`,
+      s.repo_sha ? h('div', { class: 'faint', style: { marginTop: '4px' } }, `Snapshot${s.repo_official ? ' (official, last commit before build freeze)' : s.repo_after_freeze ? ' (taken at freeze, but every commit is dated after the freeze)' : s.frozen ? ' (not the official freeze snapshot)' : ''}: `, h('code', null, s.repo_sha.slice(0, 10)), ` on ${s.repo_branch || 'default branch'} · last commit ${fmtDateTime(s.repo_commit_date)} · captured ${fmtDateTime(s.repo_snapshot_at)}`,
         s.repo_commit_date && new Date(s.repo_commit_date) > new Date(s.freeze_at) ? h('span', { class: 'badge bad', style: { marginLeft: '6px' } }, 'Commit after freeze') : null) : null,
       s.repo_error ? h('div', { class: 'badge bad', style: { whiteSpace: 'normal', marginTop: '6px' } }, s.repo_error) : null));
   }
@@ -91,10 +96,11 @@ export function submissionView(team, sub, { briefFields, disclosureFields }) {
     let kind = kinds[0];
     const holder = h('div');
     const runHolder = h('div');
-    const drawSrc = () => { clear(holder, sourceBrowser(team.id, kind)); clear(runHolder, sourceRunner(team.id, kind, s.run_command)); };
+    const canRun = role() !== 'mentor'; // mentors can read code but the sandbox is for teams, judges and staff
+    const drawSrc = () => { clear(holder, sourceBrowser(team.id, kind)); if (canRun) clear(runHolder, sourceRunner(team.id, kind, s.run_command)); };
     proto.append(...[kinds.length > 1 ? h('div', { class: 'seg' }, kinds.map((k) => h('button', { class: k === kind ? 'on' : '', 'aria-pressed': String(k === kind), onclick: (e) => { kind = k; for (const b of e.currentTarget.parentNode.children) { b.classList.toggle('on', b === e.currentTarget); b.setAttribute('aria-pressed', String(b === e.currentTarget)); } drawSrc(); } }, k === 'repo' ? 'GitHub snapshot' : `Zip: ${s.zip_name}`))) : null,
       holder,
-      h('details', null, h('summary', { style: { cursor: 'pointer', fontWeight: 600 } }, 'Run it in the sandbox', s.run_command ? h('span', { class: 'faint' }, ` · team says: ${s.run_command}`) : null), h('div', { style: { marginTop: '10px' } }, runHolder))].filter(Boolean));
+      !canRun ? null : h('details', null, h('summary', { style: { cursor: 'pointer', fontWeight: 600 } }, 'Run it in the sandbox', s.run_command ? h('span', { class: 'faint' }, ` · team says: ${s.run_command}`) : null), h('div', { style: { marginTop: '10px' } }, runHolder))].filter(Boolean));
     drawSrc();
   }
   if (!s.prototype_url && !kinds.length && !s.repo_url) proto.append(h('p', { class: 'faint' }, 'No prototype submitted.'));

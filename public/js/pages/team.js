@@ -18,10 +18,16 @@ const CP = {
   ] },
 };
 
+// Roster lock and build freeze pass on the clock: redraw when either flips (drafts are kept).
+function watchPhase(redraw) {
+  const phase = () => `${now() >= new Date(state.event.roster_lock_at).getTime()}|${frozen()}`;
+  let last = phase();
+  on('tick', () => { const p = phase(); if (p !== last) { last = p; redraw(); } });
+}
 export async function render() {
   if (role() !== 'participant') { go('#/teams'); return h('div'); }
   await loadMe();
-  if (!state.team) return noTeam();
+  if (!state.team) { watchPhase(() => route()); return noTeam(); }
   const root = h('div');
   const draw = async () => {
     const cps = (await api.get('/api/teams/mine/checkpoints')).checkpoints;
@@ -44,6 +50,7 @@ export async function render() {
   };
   await draw();
   on('team:update', async () => { await loadMe(); if (!state.team) return route(); draw(); });
+  watchPhase(draw);
   return root;
 }
 

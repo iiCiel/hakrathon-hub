@@ -5,8 +5,8 @@ import { loadMonaco, monacoLang, darkMode } from '../monaco.js';
 
 const RUN_EXT = { py: 'python', js: 'javascript', mjs: 'javascript', c: 'c', cpp: 'cpp', cc: 'cpp', java: 'java', sh: 'bash' };
 
-export async function render(route) {
-  const teamId = Number(route.params[0]) || (state.team && state.team.id);
+export async function render(rt) {
+  const teamId = Number(rt.params[0]) || (state.team && state.team.id);
   if (!teamId) {
     if (role() === 'participant') return h('div', { class: 'card empty', style: { margin: '24px' } }, h('div', { class: 'big' }, '👥'), h('p', null, 'Join a team to get a shared workspace.'), h('a', { class: 'btn', href: '#/team' }, 'Team page'));
     go('#/teams'); return h('div');
@@ -121,29 +121,43 @@ export async function render(route) {
   }
 
   // ---- saving / sync ----
-  function scheduleSave(f) {
+  // Save 1.2 s after typing stops, but never wait more than 4 s while there are unsaved changes:
+  // someone typing steadily (or right up to the freeze) still gets saved.
+  let offline = false;
+  function scheduleSave(f, delay) {
     drawBar();
-    if (!canWrite) return;
+    if (!canWrite || f.gone) return;
     clearTimeout(f.timer);
-    f.timer = setTimeout(() => save(f), 1200);
+    if (!f.dirtySince) f.dirtySince = Date.now();
+    const wait = delay ?? Math.max(0, Math.min(1200, f.dirtySince + 4000 - Date.now()));
+    f.timer = setTimeout(() => save(f), wait);
   }
-  async function save(f, force = false) {
-    if (!canWrite || f.saving || (!dirty(f) && !force)) return;
+  async function save(f, force = false, late = false) {
+    if ((!canWrite && !late) || f.saving || f.gone || (!dirty(f) && !force)) return;
     clearTimeout(f.timer);
-    f.saving = true; drawBar();
+    f.saving = true; f.dirtySince = 0; drawBar();
     const content = f.model.getValue();
+    let retry = 0;
     try {
       const r = await api.put(`/api/workspace/${teamId}/file`, { path: f.path, content, baseVersion: f.version, force });
       if (r.conflict) { f.conflict = { content: r.current.content, version: r.current.version, by: r.current.updated_by }; }
       else { f.version = r.file.version; f.saved = content; }
+      if (offline) { offline = false; toast('Back online: your changes are saved.', 'ok'); }
+      f.backoff = 0;
     } catch (e) {
-      toast(e.message, 'bad');
-      if (e.status === 403) { canWrite = false; editor.updateOptions({ readOnly: true }); }
+      if (!e.status) { // no connection: say so once, keep the text, retry with a growing gap
+        if (!offline) { offline = true; toast('Can’t reach the server. Your edits are kept here and will save when the connection is back.', 'bad', 8000); }
+        f.backoff = Math.min((f.backoff || 1500) * 2, 15000); retry = f.backoff;
+      } else if (e.status === 409) { f.gone = true; if (files.get(f.path) === f) toast(`${f.path}: ${e.message}`, 'bad', 12000); }
+      else {
+        toast(e.message, 'bad');
+        if (e.status === 403) { canWrite = false; editor.updateOptions({ readOnly: true }); }
+      }
     }
     f.saving = false;
-    if (left) return;
+    if (left || files.get(f.path) !== f) return; // page closed, or the file was renamed/deleted meanwhile
     drawBar(); drawFiles();
-    if (dirty(f) && !f.conflict) scheduleSave(f);
+    if (dirty(f) && !f.conflict) scheduleSave(f, retry || undefined);
   }
   function applyRemote(f, content, version) {
     const pos = editor.getModel() === f.model ? editor.getPosition() : null;
@@ -166,11 +180,13 @@ export async function render(route) {
     } else if (ev.renamed) {
       const f = files.get(ev.from);
       if (f && !files.has(ev.path)) {
+        clearTimeout(f.timer);
         files.delete(ev.from);
         const nf = mk(ev.path, f.model.getValue(), f.version + 1);
         nf.saved = f.saved;
         if (current === ev.from) { current = ev.path; editor.setModel(nf.model); }
         f.model.dispose();
+        if (dirty(nf)) { toast(`${ev.by.name} renamed ${ev.from} to ${ev.path}. Your unsaved edits moved with it.`, '', 8000); scheduleSave(nf); }
       }
     } else {
       const { file } = await api.get(`/api/workspace/${teamId}/file?path=${encodeURIComponent(ev.path)}`);
@@ -187,16 +203,44 @@ export async function render(route) {
   const sendPresence = () => { if (state.socket) state.socket.emit('presence', { teamId, path: current || '' }); };
   const pt = setInterval(sendPresence, 20000);
   onLeave(() => { clearInterval(pt); if (state.socket) state.socket.emit('presence', { teamId, path: '' }); });
-  on('reconnect', sendPresence);
+  // After a dropped connection (Wi-Fi, ngrok, a server restart) catch up on what teammates did.
+  on('reconnect', () => { sendPresence(); resync(); });
+  async function resync() {
+    const d = await api.get(`/api/workspace/${teamId}/all`).catch(() => null);
+    if (!d || left) return;
+    const seen = new Set();
+    for (const sf of d.files) {
+      seen.add(sf.path);
+      const f = files.get(sf.path);
+      if (!f) mk(sf.path, sf.content, sf.version);
+      else if (sf.version > f.version && !f.saving) {
+        if (dirty(f)) f.conflict = { content: sf.content, version: sf.version, by: 'A teammate' };
+        else applyRemote(f, sf.content, sf.version);
+      }
+    }
+    for (const [p, f] of [...files]) {
+      if (seen.has(p) || f.saving) continue;
+      if (dirty(f)) { f.gone = true; toast(`${p} was renamed or deleted while you were offline. Your text is still open here: copy it into another file.`, 'bad', 12000); continue; }
+      clearTimeout(f.timer); files.delete(p); f.model.dispose();
+      if (current === p) { current = [...files.keys()][0] || null; editor.setModel(current ? files.get(current).model : null); }
+    }
+    drawFiles(); drawBar(); drawRun();
+  }
   // Freeze happens on the clock; flip to read-only when it passes. freezeAt() follows extensions
   // (it is refreshed on team/event updates), so an extension keeps or re-opens the workspace.
   const member = mine && role() === 'participant';
+  let reopening = false;
   on('tick', (t) => {
     if (!member) return;
-    const open_ = t < freezeAt();
+    const fz = freezeAt();
+    const open_ = t < fz;
+    // The last seconds before the freeze: save whatever is unsaved right away.
+    if (canWrite && open_ && fz - t < 3500) for (const f of files.values()) if (dirty(f) && !f.saving && !f.conflict) save(f);
     if (canWrite && !open_) {
+      for (const f of files.values()) if (dirty(f) && !f.conflict) save(f, false, true); // the server accepts these for a few seconds
       canWrite = false; editor.updateOptions({ readOnly: true }); drawBar(); toast('Build freeze: the workspace is now read-only.', 'bad', 10000);
-    } else if (!canWrite && open_) {
+    } else if (!canWrite && open_ && !reopening) {
+      reopening = true;
       toast('Your team got more time: the workspace is open again.', 'ok', 8000);
       route(); // redraw with the editing tools
     }
@@ -222,18 +266,20 @@ export async function render(route) {
     await save(f);
     try {
       await api.post(`/api/workspace/${teamId}/rename`, { from: current, to: to.trim() });
+      clearTimeout(f.timer);
       files.delete(current);
       const nf = mk(to.trim(), f.model.getValue(), f.version + 1);
       nf.saved = f.saved;
       f.model.dispose();
       open(to.trim());
+      if (dirty(nf)) scheduleSave(nf);
     } catch (e) { toast(e.message, 'bad'); }
   }
   async function deleteFile() {
     if (!current || !(await confirmBox('Delete file?', `Delete ${current} for the whole team? This cannot be undone.`, 'Delete', true))) return;
     try {
       await api.del(`/api/workspace/${teamId}/file?path=${encodeURIComponent(current)}`);
-      const f = files.get(current); files.delete(current); f.model.dispose();
+      const f = files.get(current); clearTimeout(f.timer); files.delete(current); f.model.dispose();
       current = [...files.keys()][0] || null;
       editor.setModel(current ? files.get(current).model : null);
       drawFiles(); drawBar(); drawRun();
