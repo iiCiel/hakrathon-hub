@@ -22,7 +22,7 @@ Everything updates live (chat, files, help queue, submissions). Code and submiss
 
 **Code runner (needs Docker Desktop):** install Docker Desktop, start it, then double-click **`setup-runner.bat`** once. Student code runs in a throwaway container with no internet, a read-only system, 384 MB memory, 128 processes and a 10 s limit (30 s for judges running a repo). Without Docker everything else works; the Run button shows that the runner is unavailable. `RUNNER=local` in `.env` runs code directly on this PC for admin testing only — never use it with students.
 
-**Try every role first:** `demo.bat` starts a separate demo at http://localhost:3100 (`data-demo` folder, this computer only, red DEMO banner) with sample teams, judges and a mentor; all demo passwords are `demo-pass-2026`. Close it before the event.
+**Try every role first:** `demo.bat` starts a separate demo at http://localhost:3100 (`data-demo` folder, this computer only, red DEMO banner) with sample teams, judges and a mentor; all demo passwords are `demo-pass-2026`. It shows real event-day times (it opens at 1:30 PM, Build Sprint 2), and Admin → **Demo clock** jumps the whole demo to the morning, 10 minutes before the freeze, judging, or awards; every open screen follows. A demo left over from another day resets itself to 1:30 PM when you start it. Walkthrough for presenting it: `SHOWCASE.md`. Close it before the event.
 
 ## Event-day checklist
 
@@ -52,4 +52,4 @@ Everything lives in `data\` (SQLite database, uploads, repo snapshots). `backup.
 
 ## Development
 
-`npm test` runs the end-to-end API suite (accounts, teams, chat isolation, help queue, workspace conflicts, sandbox, zip safety, freeze, judging math, tie-breaks, awards, exports, offline package). `npm run loadtest` starts a throwaway copy and runs 50 simulated students (chat, autosave, runs) for 10 minutes, then prints response times (set `STUDENTS` and `MINUTES` to change it). Node 22.13+.
+`npm test` runs the end-to-end API suite plus a demo check (demo times and the demo clock) (accounts, teams, chat isolation, help queue, workspace conflicts, sandbox, zip safety, freeze, judging math, tie-breaks, awards, exports, offline package). `npm run loadtest` starts a throwaway copy and runs 50 simulated students (chat, autosave, runs) for 10 minutes, then prints response times (set `STUDENTS` and `MINUTES` to change it). Node 22.13+.

@@ -79,14 +79,20 @@ export async function promptBox(title, label, value = '', { multiline = false, p
 }
 
 export const initials = (name = '') => name.split(/\s+/).filter(Boolean).slice(0, 2).map((s) => s[0].toUpperCase()).join('') || '?';
+// Demo only: the demo moves the event so "now" is a chosen event-day moment; times are shown in
+// event-day time by taking that shift back off. Always 0 on the real server.
+let shiftMs = 0;
+export function setDisplayShift(ms) { shiftMs = Number(ms) || 0; }
+export const displayShift = () => shiftMs;
+export const toDisplay = (iso) => new Date(new Date(iso).getTime() - shiftMs);
 export function fmtTime(iso, opts = {}) {
   if (!iso) return '';
-  const d = new Date(iso);
+  const d = toDisplay(iso);
   return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', ...opts });
 }
 export function fmtDateTime(iso) {
   if (!iso) return '';
-  const d = new Date(iso);
+  const d = toDisplay(iso);
   return d.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 }
 export function fmtAgo(iso, now = Date.now()) {

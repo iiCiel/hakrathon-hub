@@ -187,6 +187,16 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: .9rem; }
 .tbl td { padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
 .tbl tr:hover td { background: var(--panel-2); }
 .tbl .num { text-align: right; font-variant-numeric: tabular-nums; }
+/* Narrow screens: each row becomes a small card; cells show their column name from data-label. */
+@media (max-width: 640px) {
+  .tbl.cards-sm thead { display: none; }
+  .tbl.cards-sm, .tbl.cards-sm tbody, .tbl.cards-sm tr, .tbl.cards-sm td { display: block; width: 100%; }
+  .tbl.cards-sm tr { padding: 10px 0; border-bottom: 1px solid var(--line-2); }
+  .tbl.cards-sm tr:hover td { background: none; }
+  .tbl.cards-sm td { border: 0; padding: 3px 2px; text-align: left; }
+  .tbl.cards-sm td[data-label]::before { content: attr(data-label); display: block; font-size: .72rem; text-transform: uppercase; letter-spacing: .05em; color: var(--ink-3); font-weight: 700; }
+  .tbl.cards-sm td.num .row.end { justify-content: flex-start; margin-top: 6px; }
+}
 .table-wrap { overflow-x: auto; position: relative; }
 
 .empty { text-align: center; padding: 36px 16px; color: var(--ink-3); }

@@ -1,17 +1,41 @@
-import { h, clear, field, toast, busy, confirmBox, modal, promptBox, fmtTime, fmtDateTime, fmtDur, badge, tick, ROLE_LABEL } from '../ui.js';
+import { h, clear, field, toast, busy, confirmBox, modal, promptBox, fmtTime, fmtDateTime, fmtDur, badge, tick, ROLE_LABEL, toDisplay, displayShift } from '../ui.js';
 import { api } from '../api.js';
-import { state, on, role, go, loadMe, renderChrome, laneName } from '../app.js';
+import { state, on, role, go, loadMe, renderChrome, laneName, route } from '../app.js';
 
 const TABS = [['overview', 'Overview'], ['rehearsal', 'Rehearsal'], ['event', 'Event & schedule'], ['people', 'People'], ['codes', 'Access codes'], ['scoring', 'Scoring & awards'], ['audit', 'Audit log']];
 
 export async function render(route) {
   if (role() !== 'admin') { go('#/'); return h('div'); }
   const tab = TABS.some(([k]) => k === route.params[0]) ? route.params[0] : 'overview';
-  const body = await ({ overview, rehearsal, event: eventTab, people, codes, scoring, audit })[tab]();
+  const [body, clock] = await Promise.all([({ overview, rehearsal, event: eventTab, people, codes, scoring, audit })[tab](), state.event.is_demo ? demoClock() : null]);
   return h('div', null,
     h('div', { class: 'page-head' }, h('div', null, h('h1', null, 'Admin'), h('p', null, `${state.event.event_name} · event staff controls`))),
+    clock,
     h('nav', { class: 'tabs' }, TABS.map(([k, label]) => h('a', { href: `#/admin/${k}`, class: k === tab ? 'on' : '', 'aria-current': k === tab ? 'page' : null }, label))),
     body);
+}
+
+// ---------------- demo clock (demo copy only) ----------------
+// Jump the whole demo to a moment of event day so a walkthrough can show the sprint, the freeze,
+// judging and awards without waiting. Every open screen updates live.
+async function demoClock() {
+  const d = await api.get('/api/admin/demo-clock').catch(() => null);
+  if (!d) return null;
+  const cur = new Date(d.now);
+  const curHM = cur.getUTCHours() * 60 + cur.getUTCMinutes(); // both in UTC: compare against the stage times below
+  const stageMin = (at) => { const dt = new Date(`2026-11-06T${at}:00-05:00`); return dt.getUTCHours() * 60 + dt.getUTCMinutes(); };
+  const active = d.stages.filter((x) => stageMin(x.at) <= curHM + 1).pop();
+  return h('section', { class: 'card demo-clock' },
+    h('div', { class: 'card-head' }, h('h2', null, 'Demo clock'), h('span', { class: 'faint' }, `Event time now: ${fmtTime(new Date(cur.getTime() + displayShift()).toISOString())}`)),
+    h('p', { class: 'faint', style: { margin: '0 0 10px' } }, 'Jump the demo to any part of event day. Times, checkpoints, the freeze and judging all move together; every open screen updates.'),
+    h('div', { class: 'row wrap' }, d.stages.map((x) => h('button', {
+      class: `btn sm ${active && active.id === x.id ? '' : 'secondary'}`, 'aria-pressed': String(!!(active && active.id === x.id)),
+      onclick: async (e) => {
+        busy(e.target, true, 'Moving…');
+        try { await api.post('/api/admin/demo-clock', { stage: x.id }); await loadMe(); renderChrome(); toast(`Demo is now at ${x.label}.`, 'ok'); route(); }
+        catch (ex) { toast(ex.message, 'bad'); busy(e.target, false); }
+      },
+    }, x.label))));
 }
 
 // ---------------- overview ----------------
@@ -109,8 +133,8 @@ async function editTeam(t, settings, redraw) {
 }
 
 // ---------------- event ----------------
-const toLocal = (iso) => { if (!iso) return ''; const d = new Date(iso); const p = (n) => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`; };
-const fromLocal = (v) => (v ? new Date(v).toISOString() : '');
+const toLocal = (iso) => { if (!iso) return ''; const d = toDisplay(iso); const p = (n) => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`; };
+const fromLocal = (v) => (v ? new Date(new Date(v).getTime() + displayShift()).toISOString() : '');
 
 async function eventTab() {
   const { settings: s } = await api.get('/api/admin/settings');

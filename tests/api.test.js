@@ -504,6 +504,9 @@ test('judging, tie-breaks, finalists, awards, results', async () => {
 });
 
 test('admin tools: exports, reset password, disable', async () => {
+  // The demo clock only exists in the demo copy.
+  status(await admin.get('/api/admin/demo-clock'), 404);
+  status(await admin.post('/api/admin/demo-clock', { stage: 'judging' }), 404);
   ok(await p[0].post('/api/chat/general', { body: '=HYPERLINK("http://evil")' }));
   const csv = await admin.req('GET', '/api/admin/export/scores.csv', undefined, { raw: true });
   assert.equal(csv.status, 200);

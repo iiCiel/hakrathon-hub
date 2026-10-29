@@ -1,4 +1,4 @@
-import { h, clear, toast, initials, fmtCountdown, fmtTime, ROLE_LABEL, richText } from './ui.js';
+import { h, clear, toast, initials, fmtCountdown, fmtTime, ROLE_LABEL, richText, setDisplayShift } from './ui.js';
 import { api, ApiError } from './api.js';
 
 export const state = { me: null, team: null, event: null, runner: null, github: false, offset: 0, socket: null };
@@ -33,6 +33,7 @@ export async function loadMe() {
   const d = await api.get('/api/me', { quiet401: true });
   state.me = d.user; state.team = d.team; state.event = d.event; state.runner = d.runner; state.github = d.github;
   state.offset = new Date(d.serverTime).getTime() - Date.now();
+  setDisplayShift(d.event && d.event.is_demo ? d.event.demo_shift_ms : 0);
   return d;
 }
 export const role = () => (state.me ? state.me.role : null);
@@ -226,10 +227,18 @@ export function currentRoute() {
 export function go(hash) { if (location.hash === hash) route(); else location.hash = hash; }
 
 let routeSeq = 0;
+// The page still loading when you navigate away keeps registering its live-update handlers until its
+// render finishes. Each route waits (briefly) for the previous render to settle before clearing the
+// handlers, so a slow page can never leave its handlers attached to the next one.
+let inflight = Promise.resolve();
 export async function route() {
   const seq = ++routeSeq;
-  for (const fn of cleanups) { try { fn(); } catch {} }
-  cleanups = []; pageHandlers = [];
+  const prev = inflight;
+  let settle;
+  inflight = new Promise((res) => { settle = res; });
+  try { await routeInner(seq, prev); } finally { settle(); }
+}
+async function routeInner(seq, prev) {
   const r = currentRoute();
   const main = document.getElementById('main');
   if (!state.me && r.name !== 'login') { location.hash = '#/login'; return; }
@@ -237,6 +246,10 @@ export async function route() {
   main.className = ['chat', 'workspace', 'login'].includes(r.name) ? 'full' : '';
   clear(main, h('div', { class: 'loading' }, h('span', { class: 'spinner' }), ' Loading…'));
   renderChrome();
+  await Promise.race([prev, new Promise((res) => setTimeout(res, 6000))]);
+  if (seq !== routeSeq) return;
+  for (const fn of cleanups) { try { fn(); } catch {} }
+  cleanups = []; pageHandlers = [];
   try {
     const mod = await pages[r.name]();
     if (seq !== routeSeq) return;

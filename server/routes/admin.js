@@ -9,6 +9,7 @@ const S = require('../settings');
 const runner = require('../runner');
 const source = require('../source');
 const offline = require('../offline');
+const democlock = require('../democlock');
 const { teamPublic, getCheckpoints, emailAllowed } = require('./core');
 const { postMessage } = require('./chat');
 const { completeness, subRow, adminSnapshot } = require('./submit');
@@ -79,6 +80,21 @@ r.put('/admin/settings', wrap((req) => {
   audit(req.user.id, 'settings', Object.keys(patch));
   bus.emit('all', 'event:update', {});
   return { settings: S.getSettings() };
+}));
+// ---------- demo clock (demo copy only) ----------
+r.get('/admin/demo-clock', wrap(() => {
+  if (!S.getSettings().is_demo) throw new HttpError(404, 'Only in the demo.');
+  return { stages: democlock.STAGES, now: democlock.demoNow().toISOString() };
+}));
+r.post('/admin/demo-clock', wrap((req) => {
+  if (!S.getSettings().is_demo) throw new HttpError(404, 'Only in the demo.');
+  const id = String((req.body || {}).stage || '');
+  if (!democlock.STAGES.some((x) => x.id === id)) throw new HttpError(400, 'Unknown demo stage.');
+  const stage = democlock.jump(id);
+  audit(req.user.id, 'demo-clock', stage.id);
+  bus.emit('all', 'event:update', {});
+  bus.emit('all', 'staff:update', {});
+  return { stage, now: democlock.demoNow().toISOString() };
 }));
 function teamExists(id) { const t = get('SELECT id FROM teams WHERE id = ?', Number(id)); if (!t) throw new HttpError(400, 'Unknown team.'); return t.id; }
 

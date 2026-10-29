@@ -5,7 +5,7 @@
   "main": "server/index.js",
   "scripts": {
     "start": "node server/index.js",
-    "test": "node --test tests/api.test.js",
+    "test": "node --test tests/api.test.js tests/demo.test.js",
     "demo": "node scripts/demo.js",
     "loadtest": "node scripts/loadtest.js",
     "eventday": "node scripts/eventday.js"

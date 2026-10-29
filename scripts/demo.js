@@ -12,9 +12,10 @@ if (path.basename(process.env.DATA_DIR) === 'data' || fs.existsSync(path.join(pr
 }
 const fresh = !fs.existsSync(path.join(process.env.DATA_DIR, 'hakrathon.db'));
 const { server } = require('../server/index.js');
-const { get, run } = require('../server/db');
+const { get, all, run } = require('../server/db');
 const A = require('../server/auth');
 const S = require('../server/settings');
+const democlock = require('../server/democlock');
 
 const PW = 'demo-pass-2026';
 const PORT = Number(process.env.DEMO_PORT) || 3100;
@@ -27,16 +28,10 @@ function user(email, name, role, extra = {}) {
 }
 
 function seed() {
-  // Shift every event time so that "now" is 1:30 p.m. on event day.
-  const s = S.getSettings();
-  const shift = Date.now() - Date.parse('2026-11-06T13:30:00-05:00');
-  const mv = (iso) => new Date(Date.parse(iso) + shift).toISOString();
-  S.setSettings({
-    roster_lock_at: mv(s.roster_lock_at), cp1_at: mv(s.cp1_at), cp2_at: mv(s.cp2_at), upload_open_at: mv(s.upload_open_at),
-    build_freeze_at: mv(s.build_freeze_at), validation_end_at: mv(s.validation_end_at), challenge_released: true,
-    event_name: 'HAkrathon DEMO', is_demo: true,
-    schedule: s.schedule.map((x) => ({ ...x, start: mv(x.start), end: mv(x.end) })),
-  });
+  // Move the event so "now" is 1:30 p.m. on event day (before any rows exist, so the rows below are
+  // stamped in demo time). The browser shows event-day clock times.
+  S.setSettings({ challenge_released: true, event_name: 'HAkrathon DEMO', is_demo: true });
+  democlock.jump('sprint');
   user('admin@demo.uakron.edu', 'Demo Admin', 'admin');
   for (const [i, n] of ['Dr. Rivera', 'Pat Chen', 'Alex Morgan'].entries()) user(`judge${i + 1}@demo.com`, n, 'judge');
   user('mentor@demo.com', 'Morgan Mentor', 'mentor');
@@ -61,6 +56,47 @@ function seed() {
   run('INSERT INTO files (team_id, path, content) VALUES (?,?,?)', t1, 'queue_model.py',
     'class Queue:\n    AVG_MIN = 7\n\n    def __init__(self):\n        self.people = []\n\n    def join(self, name):\n        self.people.append(name)\n\n    def next(self):\n        return self.people.pop(0) if self.people else None\n\n    def estimate(self):\n        return len(self.people) * self.AVG_MIN\n');
   run('INSERT INTO files (team_id, path, content) VALUES (?,?,?)', t1, 'README.md', '# ZipQueue\n\nWalk-in advising queue for the College of Business.\n');
+  // Two teams are further along so every role has something to show: Checkpoint 2, a finished
+  // package and staff validation; two of the three judges have already scored them (judge1 scores live).
+  const ago = (min) => new Date(Date.now() - min * 60000).toISOString();
+  const pkgs = {
+    'Phish Finders': {
+      title: 'Phish Finders: a 2-minute phishing check for COB inboxes', url: 'https://example.com/phish-finders',
+      brief: { team_roles: 'Dan Wu (backend), Eve Brooks (detection rules), Finn Lee (UX + pitch)', user: 'COB students and staff who get suspicious email', problem: 'Students forward suspicious emails to IT and wait a day for an answer; many click first.', solution: 'Paste an email or forward it to the bot; it scores the phishing risk and explains the red flags in plain words.', success_metric: 'Answer in under 10 seconds; 9 of 10 test phishes flagged in our sample set.', architecture: 'Python + Flask, rule engine plus header checks, SQLite log with no message bodies kept.', limitations: 'English only; rules tuned on 40 sample emails.', implementation_path: 'Pilot with COB IT for one semester, then hand the rules to the security office.' },
+      scores: [[8, 9, 7, 8, 8], [7, 9, 8, 7, 9]],
+    },
+    RoomRadar: {
+      title: 'RoomRadar: live study-room availability for CBA', url: 'https://example.com/roomradar',
+      brief: { team_roles: 'Gia Russo (build), Hank Shaw (problem + data), Ivy Nguyen (pitch + budget)', user: 'Students looking for a group study room in the CBA building', problem: 'Students walk three floors to find every room taken; the booking sheet is out of date.', solution: 'A phone page that shows free rooms now, from the booking calendar plus a one-tap "we left" check-out.', success_metric: 'Time to find a room drops from ~12 to under 3 minutes in a hallway test.', architecture: 'Node + Express, calendar import, mobile-first page, no personal data stored.', limitations: 'Depends on people tapping check-out; no sensors.', implementation_path: 'Facilities owns the calendar feed; a student org runs it for a semester pilot.' },
+      scores: [[7, 8, 8, 9, 7], [8, 7, 7, 8, 8]],
+    },
+  };
+  const disclosure = { data_sources: 'Sample data we made ourselves; no real student records.', apis_libraries: 'Flask/Express, SQLite, Bootstrap (MIT).', templates: 'None.', ai_use: 'Used the approved AI assistant to draft tests and polish the brief; all code reviewed by the team.', licenses: 'All MIT/BSD.', external_help: 'Mentor feedback at Checkpoint 2.' };
+  const judges = all("SELECT id FROM users WHERE role = 'judge' ORDER BY id").map((x) => x.id);
+  for (const [name, p] of Object.entries(pkgs)) {
+    const tid = get('SELECT id FROM teams WHERE name = ?', name).id;
+    const by = get('SELECT id FROM users WHERE team_id = ? ORDER BY id', tid).id;
+    run('INSERT INTO checkpoints (team_id, kind, data, submitted_by, submitted_at) VALUES (?,?,?,?,?)', tid, 'cp2', JSON.stringify({
+      core: 'Main flow works end to end on a phone', blockers: 'None right now', demo1: 'The problem in 30 seconds', demo2: 'Live walk-through of the main flow', demo3: 'Measured result + next step',
+    }), by, ago(25));
+    run(`UPDATE submissions SET project_title = ?, prototype_url = ?, video_url = ?, brief = ?, disclosure = ?, updated_at = ? WHERE team_id = ?`,
+      p.title, p.url, 'https://example.com/demo-video', JSON.stringify(p.brief), JSON.stringify(disclosure), ago(10), tid);
+    run('INSERT INTO validations (team_id, links_ok, video_ok, brief_ok, disclosure_ok, eligibility_ok, notes, validated_by, updated_at) VALUES (?,1,1,1,1,1,?,?,?)',
+      tid, 'Checked by demo admin.', get("SELECT id FROM users WHERE role = 'admin'").id, ago(5));
+    p.scores.forEach((sc, i) => run(`INSERT INTO scores (judge_id, team_id, innovation, impact, technical, usability, presentation, strength, risk, next_step, submitted, updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,1,?)`, judges[i + 1], tid, ...sc, 'Clear user and a working demo.', 'Small test sample.', 'Pilot with real users.', ago(2)));
+  }
+  // A little team chat so the Team channel isn't empty.
+  const zq = get("SELECT id FROM teams WHERE name = 'ZipQueue'").id;
+  const zqm = all('SELECT id FROM users WHERE team_id = ? ORDER BY id', zq).map((x) => x.id);
+  for (const [who, min, body] of [
+    [1, 40, 'Advising office says the walk-in line peaks 11-1. Can we show that in the demo?'],
+    [0, 32, 'Yes. I pushed queue_model.py with the wait estimate. Try `python main.py` in the Code tab.'],
+    [2, 18, 'Slides outline is in the brief draft. I will record the 5-minute demo at 4:00.'],
+  ]) run('INSERT INTO messages (channel, user_id, body, created_at) VALUES (?,?,?,?)', `team:${zq}`, zqm[who], body, ago(min));
+  const rr = get("SELECT id FROM teams WHERE name = 'RoomRadar'").id;
+  run("INSERT INTO help_requests (team_id, user_id, kind, summary, created_at) VALUES (?,?,?,?,?)", rr,
+    get('SELECT id FROM users WHERE team_id = ? ORDER BY id', rr).id, 'technical', 'Calendar import returns times one hour off. Timezone?', ago(4));
   run("INSERT INTO invites (code, role, max_uses, note) VALUES ('DEMO-STUDENT', 'participant', 100, 'Demo participant code')");
   const ann = get("SELECT id FROM users WHERE role = 'admin'").id;
   run("INSERT INTO messages (channel, user_id, body) VALUES ('announcements', ?, ?)", ann, 'Welcome to HAkrathon 2026! Checkpoint 2 is due at 3:15. Mentors are at the help desk; request one from the **Mentors** tab.');
@@ -68,6 +104,13 @@ function seed() {
 }
 
 if (fresh) seed();
+else {
+  // A demo left from another day would show the event as long over: put it back to Build Sprint 2
+  // unless it is somewhere inside event day (7:30 a.m.-7:30 p.m.).
+  const t = democlock.demoNow();
+  const evStart = Date.parse(S.T('07:30')), evEnd = Date.parse(S.T('19:30'));
+  if (!(t >= evStart && t <= evEnd)) { democlock.jump('sprint'); console.log('  Demo clock reset to 1:30 PM (Build Sprint 2).'); }
+}
 server.on('error', (e) => { if (e.code === 'EADDRINUSE') { console.error(`  Port ${PORT} is busy. Close the other demo window first.`); process.exit(1); } throw e; });
 server.listen(PORT, HOST, () => {
   console.log(`\n  HAkrathon DEMO running at http://localhost:${PORT}  (data: ${process.env.DATA_DIR})`);

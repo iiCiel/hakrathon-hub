@@ -1,4 +1,4 @@
-import { h, clear, fmtTime, fmtCountdown, fmtAgo, richText, tick, badge } from '../ui.js';
+import { h, clear, fmtTime, fmtCountdown, fmtAgo, richText, tick, badge, toDisplay } from '../ui.js';
 import { api } from '../api.js';
 import { state, now, on, role, freezeAt, laneName, route } from '../app.js';
 
@@ -36,7 +36,14 @@ export async function render() {
   };
   drawClock();
   on('tick', drawClock);
-  setTimeout(() => { const cur = timeline.querySelector('li.now') || timeline.querySelector('li:not(.past)'); if (cur) timeline.scrollTop = cur.offsetTop - timeline.offsetTop - 40; }, 50);
+  // Scroll "Today" to the current item once the page is on screen (offsets are 0 before that).
+  let tries = 0;
+  const scrollNow = () => {
+    if (!timeline.isConnected) { if (++tries < 40) setTimeout(scrollNow, 50); return; }
+    const cur = timeline.querySelector('li.now') || timeline.querySelector('li:not(.past)');
+    if (cur) timeline.scrollTop = cur.offsetTop - timeline.offsetTop - 40;
+  };
+  setTimeout(scrollNow, 0);
 
   const annList = h('div', { class: 'stack' });
   const drawAnn = (msgs) => clear(annList, msgs.length ? msgs.slice(-6).reverse().map((m) =>
@@ -61,7 +68,7 @@ export async function render() {
       const sc = (ev.schedule || []).slice().sort((a, b) => new Date(a.start) - new Date(b.start));
       if (!sc.length) return 'College of Business';
       const first = new Date(sc[0].start), last = new Date(Math.max(...sc.map((x) => new Date(x.end || x.start).getTime())));
-      return `${first.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' })} · College of Business · ${fmtTime(first.toISOString())}–${fmtTime(last.toISOString())}`;
+      return `${toDisplay(first.toISOString()).toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' })} · College of Business · ${fmtTime(first.toISOString())}–${fmtTime(last.toISOString())}`;
     })()),
     h('h1', null, ev.event_name),
     ev.challenge_released

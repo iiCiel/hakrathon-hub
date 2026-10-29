@@ -35,7 +35,7 @@ function publicSettings() {
     judging_open: !!s.judging_open, finalists_open: !!s.finalists_open, results_published: !!s.results_published,
     registration_open: !!s.registration_open, max_teams: s.max_teams, team_min: s.team_min, team_max: s.team_max,
     max_video_seconds: s.max_video_seconds, lanes: s.lanes, criteria: s.criteria, awards: s.awards, schedule: s.schedule,
-    runner_enabled: !!s.runner_enabled, is_demo: !!s.is_demo,
+    runner_enabled: !!s.runner_enabled, is_demo: !!s.is_demo, demo_shift_ms: s.is_demo ? Number(s.demo_shift_ms) || 0 : 0,
   };
 }
 const githubEnabled = () => !!(process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET);

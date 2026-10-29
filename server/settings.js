@@ -81,6 +81,7 @@ const DEFAULTS = {
   min_judges: 3,
   runner_enabled: true,
   is_demo: false,
+  demo_shift_ms: 0, // demo only: how far event times were moved so "now" lands on a chosen event-day moment
   rehearsal: {}, // manual rehearsal checklist ticks: { id: { done, by, at } }
 };
 
@@ -112,4 +113,4 @@ function freezeAt(team) {
 function isFrozen(team, now = Date.now()) { return now >= freezeAt(team); }
 function rosterLocked(now = Date.now()) { return now >= Date.parse(getSettings().roster_lock_at); }
 
-module.exports = { DEFAULTS, getSettings, setSettings, freezeAt, isFrozen, rosterLocked };
+module.exports = { T, DEFAULTS, getSettings, setSettings, freezeAt, isFrozen, rosterLocked };
