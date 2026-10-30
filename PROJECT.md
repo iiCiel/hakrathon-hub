@@ -43,7 +43,7 @@ Event facts: checkpoints 10:00 and 3:15, freeze 4:30, validation 4:30-5:00, judg
 ###### Next
 - [ ] (waiting on Soliman) Docker Desktop on this laptop (Soliman installs it), then setup-runner.bat, confirm Admin > Rehearsal "Code runner ready", re-run npm run eventday for sandbox checks.
 - [ ] (waiting on Soliman) Nov 5 rehearsal: work down Admin > Rehearsal on the real server (phone on event Wi-Fi, test team, test score, offline package, backup).
-- [ ] Nothing else agent-doable before Nov 5: ready check done 2026-10-30 (b1817f3, all pass); flaky demo test fixed (959b8ed). Re-run the full ready check only if app code changes.
+- [ ] Nothing else agent-doable before Nov 5: ready check re-run 2026-10-30 evening on 959b8ed (all pass: npm test 25/0/1 skipped, eventday "146 passed, 0 failed", loadtest 11,810 requests 0 errors, 5 stages x 1366/390 screenshots .shots\ready2-*). Re-run the full ready check only if app code changes.
 - [ ] Nice to have (after Nov 5 rehearsal passed): server-side video length check (ffprobe); per-file size check of GitHub repos before download.
 - [ ] Nice to have (after Nov 5 rehearsal passed): other wide tables could use .tbl.cards-sm on phones.
 - After Nov 6 ideas: gh-pages showcase doesn't show registration/check-in/meals/in-browser run yet; async offline-package build (202 + poll).
