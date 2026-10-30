@@ -260,7 +260,17 @@ r.put('/admin/validation/:teamId', wrap((req) => {
 }));
 
 r.post('/admin/snapshot/:teamId', wrap(async (req) => { await adminSnapshot(Number(req.params.teamId), req.user.id, { useToken: !!(req.body || {}).use_token }); return { ok: true }; }));
-r.post('/admin/snapshot-all', wrap(async (req) => {
+// The server drops connections that stay quiet for 2 minutes (server.timeout). Long admin builds send
+// nothing until they finish, so give that one request up to 30 minutes, then restore the normal limit.
+function allowLongRequest(req, res) {
+  const srv = req.socket.server || req.socket._server;
+  const normal = srv && typeof srv.timeout === 'number' ? srv.timeout : 120 * 1000;
+  req.setTimeout(30 * 60 * 1000);
+  res.once('finish', () => { if (!req.socket.destroyed) req.socket.setTimeout(normal); });
+}
+
+r.post('/admin/snapshot-all', wrap(async (req, res) => {
+  allowLongRequest(req, res);
   const results = [];
   for (const t of all("SELECT t.id, t.name FROM teams t JOIN submissions s ON s.team_id = t.id WHERE s.repo_url != ''")) {
     try { await adminSnapshot(t.id, req.user.id); results.push({ team: t.name, ok: true }); }
@@ -385,7 +395,8 @@ r.put('/admin/rehearsal/:id', wrap((req) => {
 
 // Offline judging package (if the network dies): a folder of static pages to copy to a USB stick.
 r.get('/admin/offline-package', wrap(() => offline.info()));
-r.post('/admin/offline-package', wrap(async (req) => {
+r.post('/admin/offline-package', wrap(async (req, res) => {
+  allowLongRequest(req, res);
   const out = await offline.buildOnce();
   audit(req.user.id, 'offline.build', { teams: out.teams });
   return out;

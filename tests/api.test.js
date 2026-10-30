@@ -661,6 +661,21 @@ test('admin tools: exports, reset password, disable', async () => {
   assert.match(await t.text(), /Zip Coders/);
 });
 
+test('long admin builds are not cut off by the 2-minute quiet-connection limit', async () => {
+  // On event day, building the offline package (or snapshotting every repo) can take over 2 minutes
+  // with 10 teams' videos. The server sends nothing until it is done, so the idle limit must not apply.
+  // Shrink the idle limit and slow the build down instead of waiting minutes.
+  const offline = require('../server/offline');
+  const realBuild = offline.buildOnce, realTimeout = server.timeout;
+  offline.buildOnce = async () => { await new Promise((r) => setTimeout(r, 900)); return { teams: 0, built_at: 'x' }; };
+  server.timeout = 300;
+  try {
+    const res = await admin.post('/api/admin/offline-package');
+    assert.equal(res.status, 200);
+    assert.equal(res.data.built_at, 'x');
+  } finally { offline.buildOnce = realBuild; server.timeout = realTimeout; }
+});
+
 test('tie-break ranking is a strict order (same result for any input order)', () => {
   const { rankScored } = require('../server/routes/judge');
   const mk = (id, avg, impact) => ({ team_id: id, team: `T${id}`, average: avg, criteria: { impact, technical: 5, innovation: 5 }, flags: [] });
