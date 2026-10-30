@@ -30,7 +30,9 @@ test.before(async () => {
   let out = '';
   child.stdout.on('data', (d) => { out += d; });
   child.stderr.on('data', (d) => { out += d; });
-  for (let i = 0; i < 100 && !out.includes('DEMO running'); i++) await new Promise((r) => setTimeout(r, 100));
+  // A fresh seed takes ~5 s alone; with the other test files running in parallel it
+  // has gone past 10 s (one false failure on 2026-10-30), so allow 30 s.
+  for (let i = 0; i < 300 && !out.includes('DEMO running'); i++) await new Promise((r) => setTimeout(r, 100));
   assert.ok(out.includes('DEMO running'), out);
 });
 test.after(() => { child.kill(); setTimeout(() => { try { fs.rmSync(DATA, { recursive: true, force: true }); } catch {} }, 300); });
