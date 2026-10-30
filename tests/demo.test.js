@@ -96,6 +96,42 @@ test('demo: meals follow the demo clock; sample registrations and check-ins are 
   }
 });
 
+test('demo at 8:40 AM: work done later in the day is not shown yet, and comes back at 1:30 PM', async () => {
+  assert.equal((await req('POST', '/api/auth/login', { email: 'admin@demo.uakron.edu', password: 'demo-pass-2026' })).status, 200);
+  assert.equal((await req('POST', '/api/admin/demo-clock', { stage: 'sprint' })).status, 200);
+  const items = (ov) => Object.fromEntries(ov.teams.map((t) => [t.name, t.completeness.items.filter((i) => ['cp1', 'cp2', 'prototype', 'video', 'brief', 'disclosure'].includes(i.id)).map((i) => `${i.id}:${i.ok}`).join(' ')]));
+  const sprint = (await req('GET', '/api/admin/overview')).data;
+  assert.equal(sprint.teams.filter((t) => t.completeness.complete).length, 2);
+
+  assert.equal((await req('POST', '/api/admin/demo-clock', { stage: 'morning' })).status, 200);
+  const morning = (await req('GET', '/api/admin/overview')).data;
+  for (const t of morning.teams) {
+    assert.equal(t.completeness.complete, false, t.name);
+    for (const i of t.completeness.items.filter((x) => ['cp1', 'cp2', 'prototype', 'video', 'brief', 'disclosure'].includes(x.id))) assert.equal(i.ok, false, `${t.name} ${i.id} at 8:40 AM`);
+  }
+  assert.equal(morning.help.open, 0, 'the 1:26 PM help request is not open yet at 8:40 AM');
+  // Judges have not scored anything at 8:40 AM, and the student team page agrees.
+  const pf = morning.teams.find((t) => t.name === 'Phish Finders');
+  assert.equal((await req('GET', `/api/admin/scorecards/${pf.id}`)).data.cards.length, 0, 'no judge scores at 8:40 AM');
+  const zq = morning.teams.find((t) => t.name === 'ZipQueue');
+  const chat = await req('GET', `/api/chat/team:${zq.id}`);
+  assert.equal(chat.status, 200, JSON.stringify(chat.data));
+  assert.equal(chat.data.messages.length, 0, 'team chat from 12:50-1:12 PM is not there yet');
+
+  // Back to 1:30 PM: everything is back, exactly as before.
+  assert.equal((await req('POST', '/api/admin/demo-clock', { stage: 'sprint' })).status, 200);
+  const again = (await req('GET', '/api/admin/overview')).data;
+  assert.deepEqual(items(again), items(sprint));
+  assert.equal(again.teams.filter((t) => t.completeness.complete).length, 2);
+  assert.equal(again.help.open, 1);
+  // Straight from 8:40 AM to judging also brings it all back.
+  assert.equal((await req('POST', '/api/admin/demo-clock', { stage: 'morning' })).status, 200);
+  assert.equal((await req('POST', '/api/admin/demo-clock', { stage: 'judging' })).status, 200);
+  const judging = (await req('GET', '/api/admin/overview')).data;
+  assert.equal(judging.teams.filter((t) => t.completeness.complete).length, 2);
+  assert.equal((await req('POST', '/api/admin/demo-clock', { stage: 'sprint' })).status, 200);
+});
+
 test('server-made text (Rehearsal, offline package) shows event-day times in the demo', async () => {
   assert.equal((await req('POST', '/api/auth/login', { email: 'admin@demo.uakron.edu', password: 'demo-pass-2026' })).status, 200);
   for (const stage of ['sprint', 'judging']) {

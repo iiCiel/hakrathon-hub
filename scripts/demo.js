@@ -100,7 +100,8 @@ function seed() {
     get('SELECT id FROM users WHERE team_id = ? ORDER BY id', rr).id, 'technical', 'Calendar import returns times one hour off. Timezone?', ago(4));
   run("INSERT INTO invites (code, role, max_uses, note) VALUES ('DEMO-STUDENT', 'participant', 100, 'Demo participant code')");
   const ann = get("SELECT id FROM users WHERE role = 'admin'").id;
-  run("INSERT INTO messages (channel, user_id, body) VALUES ('announcements', ?, ?)", ann, 'Welcome to HAkrathon 2026! Checkpoint 2 is due at 3:15. Mentors are at the help desk; request one from the **Mentors** tab.');
+  // Posted at 7:45 AM, so it is already there when the Demo clock goes back to 8:40 AM.
+  run("INSERT INTO messages (channel, user_id, body, created_at) VALUES ('announcements', ?, ?, ?)", ann, 'Welcome to HAkrathon 2026! Checkpoint 2 is due at 3:15. Mentors are at the help desk; request one from the **Mentors** tab.', ago(345));
   run("INSERT INTO messages (channel, user_id, body) VALUES ('general', ?, ?)", get("SELECT id FROM users WHERE email = 'student1@zips.uakron.edu'").id, 'Anyone know if the Wi-Fi blocks port 5000? Our Flask app works with:\n```python\napp.run(host="0.0.0.0", port=8080)\n```');
   // Event registration + check-in: the nine team members registered weeks ago and checked in at
   // 7:30-8:00; a few more are pending, waitlisted, or confirmed but not here.
