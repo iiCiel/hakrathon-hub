@@ -70,5 +70,5 @@ Event facts: checkpoints 10:00 and 3:15, freeze 4:30, validation 4:30-5:00, judg
 - Advice for the next run: Verify the real demo.bat on port 3100, not a test port. Confirm test and simulation counts from the log before reporting them. Before a showcase, freeze features and only fix bugs. Keep the final report's claims tied to a visible result.
 
 ## Waiting on Soliman
-- Restart demo.bat so your demo has the 8:40 AM fix (due 2026-10-29)
+- Close the demo.bat window, delete the data-demo folder (D:\Projects\hakrathon-hub\data-demo), then double-click demo.bat again (needed so the welcome announcement shows at 8:40 AM; the old data-demo has it dated about 1:30 PM, so 8:40 hides it) (due 2026-10-29)
 - Install Docker Desktop so the code Run button works (due 2026-11-05)
