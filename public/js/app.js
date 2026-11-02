@@ -227,7 +227,7 @@ function connectSocket() {
     dispatch('chat:message', m);
     if (currentRoute().name !== 'chat') renderChrome();
   });
-  for (const ev of ['chat:update', 'file:update', 'presence', 'help:update', 'help:new', 'submission:update', 'staff:update', 'teams:update']) s.on(ev, (d) => dispatch(ev, d));
+  for (const ev of ['chat:update', 'file:update', 'presence', 'help:update', 'help:new', 'submission:update', 'staff:update', 'teams:update', 'duty:update']) s.on(ev, (d) => dispatch(ev, d));
   s.on('help:new', (r) => { if (['admin', 'mentor'].includes(role()) && currentRoute().name !== 'help') toast(`Help needed: ${r.team_name} (table ${r.table_no || '?'}) · ${r.kind}`, '', 8000); });
   for (const ev of ['me:update', 'team:update', 'event:update']) {
     s.on(ev, async () => {

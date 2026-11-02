@@ -1,0 +1,6 @@
+# Replace hak.example.com with the real hostname (its DNS must point at this server).
+# Caddy gets the HTTPS certificate on its own and passes WebSockets through.
+hak.example.com {
+	encode gzip
+	reverse_proxy 127.0.0.1:3000
+}

@@ -1,0 +1,18 @@
+# /etc/systemd/system/hakrathon.service
+[Unit]
+Description=HAkrathon Hub
+After=network.target
+
+[Service]
+User=hak
+WorkingDirectory=/opt/hakrathon-hub
+Environment=PORT=3000
+Environment=HOST=127.0.0.1
+Environment=TRUST_PROXY=1
+Environment=DATA_DIR=/var/lib/hakrathon
+ExecStart=/usr/bin/node server/index.js
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

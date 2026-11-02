@@ -224,6 +224,8 @@ CREATE TABLE IF NOT EXISTS audit (
 function addColumn(table, col, def) {
   if (!db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${def}`);
 }
+addColumn('users', 'on_duty', 'INTEGER NOT NULL DEFAULT 0'); // mentor/judge check-in
+addColumn('users', 'duty_since', "TEXT DEFAULT ''");
 addColumn('invites', 'email', "TEXT DEFAULT ''");
 addColumn('checkpoints', 'updated_at', "TEXT DEFAULT ''");
 addColumn('checkpoints', 'updated_by', 'INTEGER');

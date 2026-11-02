@@ -1,5 +1,6 @@
 import { h, clear, field, toast, formData, busy, fmtAgo, fmtTime, badge, modal } from '../ui.js';
 import { api } from '../api.js';
+import { dutyCard, mentorsHereLine } from '../duty.js';
 import { state, on, role, now, frozen, route } from '../app.js';
 
 const STATUS = { open: ['Waiting', 'warn'], claimed: ['Mentor on the way', 'blue'], resolved: ['Resolved', 'ok'], cancelled: ['Cancelled', ''] };
@@ -50,7 +51,7 @@ async function participantView() {
     form.prepend(h('p', { class: 'badge bad', style: { display: 'block', whiteSpace: 'normal', marginBottom: '10px' } }, 'Mentor requests closed at build freeze. Ask event staff at the help desk.'));
   });
   return h('div', null,
-    h('div', { class: 'page-head' }, h('div', null, h('h1', null, 'Mentors'), h('p', null, `Table ${state.team.table_no || '—'} · requests go to every mentor on duty.`))),
+    h('div', { class: 'page-head' }, h('div', null, h('h1', null, 'Mentors'), h('p', null, `Table ${state.team.table_no || '—'} · requests go to every mentor on duty.`), mentorsHereLine())),
     h('div', { class: 'split' }, form, h('aside', { class: 'card' }, h('h2', null, 'Your team’s requests'), listEl)));
 }
 
@@ -75,7 +76,7 @@ async function mentorView() {
   on('tick', () => { for (const el of root.querySelectorAll('[data-ago]')) el.textContent = fmtAgo(el.dataset.ago, now()); });
   return h('div', null,
     h('div', { class: 'page-head' }, h('div', null, h('h1', null, 'Help queue'), h('p', null, 'Claim a request, go to the table, then resolve it with a short log note.'))),
-    root);
+    dutyCard(), root);
 }
 
 function card(r, kinds, redraw) {

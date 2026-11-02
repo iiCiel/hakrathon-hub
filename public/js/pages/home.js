@@ -1,5 +1,6 @@
 import { h, clear, fmtTime, fmtCountdown, fmtAgo, richText, tick, badge, toDisplay } from '../ui.js';
 import { api } from '../api.js';
+import { dutyCard } from '../duty.js';
 import { state, now, on, role, freezeAt, laneName, route } from '../app.js';
 
 function currentStage(schedule, t) {
@@ -89,6 +90,7 @@ export async function render() {
   if (role() === 'admin') mainCol.append(h('section', { class: 'card' }, h('h2', null, 'Run of show'),
     h('div', { class: 'row' }, h('a', { class: 'btn', href: '#/admin' }, 'Admin overview'), h('a', { class: 'btn secondary', href: '#/admin/event' }, 'Event settings'),
       h('a', { class: 'btn secondary', href: '#/admin/scoring' }, 'Scoring'), h('a', { class: 'btn secondary', href: '#/help' }, 'Help queue'))));
+  if (role() !== 'participant') mainCol.append(dutyCard());
   mainCol.append(h('section', { class: 'card' }, h('div', { class: 'card-head' }, h('h2', null, 'Announcements'), h('a', { href: '#/chat/announcements' }, 'Open channel')), annList));
   mainCol.append(h('section', { class: 'card' }, h('h2', null, 'Solution lanes'),
     h('p', { class: 'faint' }, 'Every team answers the same challenge and picks one primary lane. Lanes organize ideas; they are not separate judging divisions.'),

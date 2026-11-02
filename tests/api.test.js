@@ -691,3 +691,19 @@ test('tie-break ranking is a strict order (same result for any input order)', ()
   const r = rankScored([mk(1, 70, 5), mk(2, 70, 5)]);
   assert.ok(r[0].flags.some((f) => f.includes('judge vote needed')));
 });
+
+test('mentor/judge on-duty check-in', async () => {
+  status(await p[0].post('/api/duty', { on: true }), 403, 'students cannot check in');
+  ok(await mentor.post('/api/duty', { on: true }));
+  ok(await j[0].post('/api/duty', { on: true }));
+  const m = ok(await mentor.get('/api/duty'));
+  assert.equal(m.me.on_duty, true);
+  assert.ok(m.staff.some((s) => s.role === 'judge' && s.on_duty), 'staff see judges');
+  const s = ok(await p[0].get('/api/duty'));
+  assert.equal(s.me, null);
+  assert.ok(s.staff.length && s.staff.every((x) => x.role === 'mentor'), 'students only see mentors');
+  assert.ok(s.staff.some((x) => x.name === 'Mentor M' && x.on_duty));
+  ok(await mentor.post('/api/duty', { on: false }));
+  assert.equal(ok(await p[0].get('/api/duty')).staff.find((x) => x.name === 'Mentor M').on_duty, false);
+  status(await new Client().get('/api/duty'), 401, 'sign-in required');
+});

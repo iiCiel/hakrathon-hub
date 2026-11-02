@@ -69,6 +69,7 @@ app.use('/api', (req, _res, next) => {
 
 app.use('/api', require('./routes/core').router);
 app.use('/api', require('./routes/chat').router);
+app.use('/api', require('./routes/duty').router);
 app.use('/api', require('./routes/workspace').router);
 app.use('/api', require('./routes/submit').router);
 app.use('/api', require('./routes/judge').router);
