@@ -103,7 +103,8 @@ main.full { max-width: none; padding: 0; }
 .split { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 18px; align-items: start; }
 .split.wide-side { grid-template-columns: minmax(0, 1fr) 420px; }
 .sticky { position: sticky; top: 76px; }
-@media (max-width: 1000px) { .split, .split.wide-side { grid-template-columns: minmax(0, 1fr); } .sticky { position: static; } }
+/* One column: the side panel flows with the page. !important beats the judge scorecard's inline desktop scroll box. */
+@media (max-width: 1000px) { .split, .split.wide-side { grid-template-columns: minmax(0, 1fr); } .sticky { position: static; max-height: none !important; overflow: visible !important; } }
 
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); padding: 18px; }
 .card.flat { box-shadow: none; }
