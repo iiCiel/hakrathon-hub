@@ -17,7 +17,7 @@ To reset the demo completely, close the window and delete the `data-demo` folder
 
 **1. Student, 1:30 PM, Build Sprint 2** (window 1: student1)
 - Home: event timeline, countdown to Checkpoint 2 and the 4:30 freeze, team checklist (3 of 8 done).
-- Code: shared editor with the team's files. Type in `main.py` and it autosaves. (Run needs Docker; without Docker it says the runner is unavailable.)
+- Code: shared editor with the team's files. Type in `main.py` and it autosaves. Click **Run**: Python and JavaScript run right in the browser, no Docker needed (the output says "ran in your browser"; the first run can take a few seconds).
 - Chat → Team · ZipQueue: private team channel with history.
 - Mentors: ask for help ("Technical", one line).
 
@@ -34,7 +34,7 @@ To reset the demo completely, close the window and delete the `data-demo` folder
 - Window 2: sign in as judge1@demo.com → Judging → **Score** Phish Finders: prototype link, brief, disclosures, checkpoints, 1-10 rubric with the live weighted total. Submit.
 
 **5. Results** (window 2: admin again)
-- Admin → Scoring & awards: the tabulation updates (3 judges now), tie-break rules, flags. **Mark top 3 as finalists**, assign awards (one prize per team), tick **Results published**: every screen gets a Results tab.
+- Admin → Scoring & awards: the tabulation updates (3 judges now), tie-break rules, flags. **Mark top 3 as finalists**, assign awards (one prize per team), tick **Results published** and click **Yes**: every screen gets a Results tab.
 
 Back to the start any time: Admin → Demo clock → **1:30 PM · Build Sprint 2**.
 
@@ -42,6 +42,8 @@ Back to the start any time: Admin → Demo clock → **1:30 PM · Build Sprint 2
 
 | What you see | What to say | What to do |
 |---|---|---|
-| Code → **Run** says "Runner unavailable: Docker is not running…" | "On event day the code runs in a locked-down sandbox (no internet, memory and time limits). This laptop doesn't have it installed, so I'll show a finished project instead." | As admin: Demo clock → **5:15 PM · Primary judging**. Then sign in as judge1@demo.com → Judging → **Score** Phish Finders (or RoomRadar): title, prototype link, video, brief and disclosures are all filled in. (Before 5:15 PM the judge page only offers a preview.) |
+| Admin → Overview shows Code runner **Unavailable** in red | "That's the event-day sandbox (no internet, memory and time limits). This laptop doesn't have it installed, so Python and JavaScript run in the browser instead." | Nothing to fix. Carry on. |
+| Code → **Run** is greyed out and says "needs the event code runner" (a C, C++, Java or Bash file is open) | "Those languages run in the event-day sandbox, which isn't on this laptop. Python and JavaScript run right here." | Click `main.py` in the file list, then **Run**. |
+| **Run** on `main.py` fails or hangs | "I'll show a finished project instead." | As admin: Demo clock → **5:15 PM · Primary judging**. Then sign in as judge1@demo.com → Judging → **Score** Phish Finders (or RoomRadar): title, prototype link, video, brief and disclosures are all filled in. (Before 5:15 PM the judge page only offers a preview.) |
 | Demo clock click does nothing, or the time/banner didn't change | "One second, I'll jump the clock again." | Click the same stage button again and reload the page (F5). Still stuck: close the demo.bat window, delete the `data-demo` folder, double-click `demo.bat`, sign in again. It opens at 1:30 PM. |
 | A page is blank, frozen, or shows an error | "Let me restart the demo." | Close the demo.bat window and double-click `demo.bat` again (your demo data stays), then reload the browser. Only if it's still broken: delete `data-demo` too. |
