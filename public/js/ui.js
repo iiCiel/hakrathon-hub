@@ -11,7 +11,7 @@ export function h(tag, attrs, ...children) {
       else if (k.startsWith('on') && typeof v === 'function') el.addEventListener(k.slice(2).toLowerCase(), v);
       else if (k === 'html') el.innerHTML = v;
       else if (k === 'value') el.value = v;
-      else if (k === 'checked') el.checked = !!v;
+      else if (k === 'checked') { el.defaultChecked = !!v; el.checked = !!v; } // defaultChecked: what form.reset() goes back to
       else if (v === true) el.setAttribute(k, '');
       else el.setAttribute(k, v);
     }
