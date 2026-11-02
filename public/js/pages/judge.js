@@ -44,7 +44,8 @@ async function listPage() {
   };
   let lastDraw = Date.now(), waiting = true;
   const draw2 = async () => { lastDraw = Date.now(); try { await draw(); } catch { return; } waiting = !!root.querySelector('[title^="Submissions open to judges"]'); };
-  await draw2();
+  await draw(); // first load: a refusal or network error shows on the page instead of a blank screen
+  waiting = !!root.querySelector('[title^="Submissions open to judges"]');
   on('event:update', draw2);
   // Teams freeze on the clock (some with extensions): refresh while any is still building.
   on('tick', (t) => { if (waiting && t >= freezeAt() && Date.now() - lastDraw > 10000) draw2(); });
