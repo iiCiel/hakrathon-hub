@@ -10,6 +10,7 @@ const path = require('node:path');
 const DATA = fs.mkdtempSync(path.join(os.tmpdir(), 'hak-test-'));
 process.env.DATA_DIR = DATA;
 process.env.RUNNER = process.env.RUNNER || 'docker';
+process.env.TLS_CERT = ''; process.env.TLS_KEY = ''; // HTTPS mode has its own test: tests/https.test.js
 const AdmZip = require('adm-zip');
 const { server, bootstrapAdmin } = require('../server/index.js');
 const { get } = require('../server/db');

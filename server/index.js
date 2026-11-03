@@ -2,6 +2,9 @@
 const path = require('node:path');
 const fs = require('node:fs');
 const http = require('node:http');
+const https = require('node:https');
+const tls = require('node:tls');
+const crypto = require('node:crypto');
 const os = require('node:os');
 
 // Load .env (KEY=VALUE lines) without a dependency.
@@ -18,7 +21,7 @@ const { Server } = require('socket.io');
 const { get, run, DATA_DIR } = require('./db');
 const A = require('./auth');
 const S = require('./settings');
-const { bus, code, HttpError } = require('./util');
+const { bus, code, HttpError, portalUrl } = require('./util');
 const { canRead } = require('./routes/workspace');
 
 const app = express();
@@ -98,8 +101,32 @@ app.use((err, req, res, _next) => {
   res.status(status).send(message);
 });
 
+// ---------- HTTPS (optional) ----------
+// TLS_CERT + TLS_KEY (PEM files) make the portal serve HTTPS itself; without them it serves plain http
+// (local testing, the demo, or behind a reverse proxy). A broken setup stops here rather than quietly
+// falling back to sending passwords over plain http.
+function tlsOptions() {
+  const certPath = process.env.TLS_CERT, keyPath = process.env.TLS_KEY;
+  if (!certPath && !keyPath) return null;
+  const stop = (msg) => { console.error(`\n  HTTPS setup problem: ${msg}\n`); process.exit(1); };
+  if (!certPath || !keyPath) stop('set both TLS_CERT and TLS_KEY, or neither.');
+  let opts;
+  try { opts = { cert: fs.readFileSync(certPath), key: fs.readFileSync(keyPath), minVersion: 'TLSv1.2' }; }
+  catch (e) { stop(`could not read the certificate or key file (${e.code}: ${e.path}).`); }
+  try {
+    tls.createSecureContext(opts);
+    const x = new crypto.X509Certificate(opts.cert);
+    if (!x.checkPrivateKey(crypto.createPrivateKey(opts.key))) throw new Error('mismatch');
+    const left = (Date.parse(x.validTo) - Date.now()) / 86400000;
+    console.log(`  HTTPS certificate: ${x.subjectAltName || x.subject}; expires ${x.validTo}`);
+    if (left < 14) console.warn(`  WARNING: this certificate has ${Math.floor(left)} days left.`);
+  } catch { stop(`${certPath} and ${keyPath} do not match, or are not a valid certificate and key.`); }
+  return opts;
+}
+const tlsOpts = tlsOptions();
+
 // ---------- realtime ----------
-const server = http.createServer(app);
+const server = tlsOpts ? https.createServer(tlsOpts, app) : http.createServer(app);
 // Node cuts off any request still running after 5 minutes by default. A 300–500 MB demo video over
 // busy Wi-Fi or ngrok can take longer than that, so uploads get an hour; headers must still arrive fast.
 server.requestTimeout = 60 * 60 * 1000;
@@ -206,6 +233,30 @@ setInterval(() => run('DELETE FROM sessions WHERE expires_at < ?', Date.now()), 
 
 const PORT = Number(process.env.PORT) || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
+
+// HTTP_REDIRECT_PORT (normally 80): sends anyone typing the plain http address over to HTTPS. It serves
+// no pages or API, so nothing sensitive can travel over it once the browser has followed the redirect.
+function startRedirect() {
+  const port = Number(process.env.HTTP_REDIRECT_PORT);
+  if (!tlsOpts || !port) return;
+  let fixedHost = '';
+  try { if (process.env.PUBLIC_URL) fixedHost = new URL(process.env.PUBLIC_URL).host; } catch {}
+  const redirect = http.createServer((req, res) => {
+    req.resume();
+    const name = String(req.headers.host || '').replace(/:\d+$/, '');
+    if (!fixedHost && !/^[A-Za-z0-9.-]+$|^\[[0-9A-Fa-f:]+\]$/.test(name)) { res.writeHead(400); return res.end('Bad request.'); }
+    const target = fixedHost || (PORT === 443 ? name : `${name}:${PORT}`);
+    const safeGet = req.method === 'GET' || req.method === 'HEAD';
+    res.writeHead(safeGet ? 301 : 308, { Location: `https://${target}${req.url}`, 'Cache-Control': 'max-age=3600', Connection: 'close' });
+    res.end();
+  });
+  redirect.requestTimeout = 10000;
+  redirect.headersTimeout = 5000;
+  // The portal itself is fine without the redirect, so a busy port 80 is only a warning.
+  redirect.on('error', (e) => console.warn(`  Port ${port} redirect not started (${e.code}). HTTPS still works; people must type https://`));
+  redirect.listen(port, HOST, () => console.log(`    Plain http:     port ${port} redirects to HTTPS`));
+}
+
 if (require.main === module) {
   bootstrapAdmin();
   server.on('error', (e) => {
@@ -213,13 +264,18 @@ if (require.main === module) {
       console.error(`\n  Port ${PORT} is already in use. Is another copy of the portal (or the DEMO) still running?\n  Close that window, then start this again.\n`);
       process.exit(1);
     }
+    if (e.code === 'EACCES') {
+      console.error(`\n  Not allowed to use port ${PORT}. On Linux, ports under 1024 need CAP_NET_BIND_SERVICE (see deploy/hakrathon-https.conf).\n`);
+      process.exit(1);
+    }
     throw e;
   });
+  startRedirect();
   server.listen(PORT, HOST, () => {
     const lan = Object.values(os.networkInterfaces()).flat().filter((i) => i && i.family === 'IPv4' && !i.internal).map((i) => i.address);
     console.log(`  ${S.getSettings().event_name} portal is running`);
-    console.log(`    This computer:  http://localhost:${PORT}`);
-    for (const ip of lan) console.log(`    Same Wi-Fi:     http://${ip}:${PORT}`);
+    console.log(`    This computer:  ${portalUrl('localhost')}`);
+    for (const ip of lan) console.log(`    Same Wi-Fi:     ${portalUrl(ip)}`);
     console.log(`    Code runner:    ${process.env.RUNNER || 'docker'} mode (status shown in Admin > Overview)\n`);
   });
 }

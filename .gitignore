@@ -9,3 +9,11 @@ data-demo/
 *.log
 .shots/
 *.bak-*
+# HTTPS keys and certificates; notes with internal server details (this repo is public)
+certs/
+*.pem
+*.key
+*.csr
+*.crt
+reply_to_it_*.md
+DEPLOY-EVENT-SERVER.md

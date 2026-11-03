@@ -7,6 +7,7 @@
 // backup. Prints PASS/FAIL per check and how long each phase took.
 //
 //   node scripts/eventday.js            (SKIP_NET=1 to skip GitHub, HEAVY=0 for small uploads only)
+//   Over HTTPS: set TLS_CERT and TLS_KEY (certificate must cover 127.0.0.1) and NODE_EXTRA_CA_CERTS=<the certificate>.
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -21,6 +22,7 @@ const AdmZip = require('adm-zip');
 const STUDENTS = 50, TEAM = 5, JUDGES = 3, MENTORS = 2;
 const HEAVY = process.env.HEAVY !== '0';
 const NET = !process.env.SKIP_NET;
+const TLS = !!process.env.TLS_CERT;
 let BASE, HOST;
 
 // ---------- reporting ----------
@@ -81,7 +83,7 @@ class Client {
   }
   socket() {
     return new Promise((resolve, reject) => {
-      const ws = new WebSocket(`ws://${HOST}/socket.io/?EIO=4&transport=websocket`, { headers: { Cookie: this.cookie, Origin: BASE } });
+      const ws = new WebSocket(`${TLS ? 'wss' : 'ws'}://${HOST}/socket.io/?EIO=4&transport=websocket`, { headers: { Cookie: this.cookie, Origin: BASE } });
       ws.on('message', (buf) => {
         const m = buf.toString();
         if (m[0] === '0') ws.send('40');
@@ -124,8 +126,8 @@ function zipOf(files) { const z = new AdmZip(); for (const [p, c] of Object.entr
 const freePort = () => new Promise((r) => { const s = net.createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => r(p)); }); });
 async function main() {
   const port = await freePort();
-  HOST = `127.0.0.1:${port}`; BASE = `http://${HOST}`;
-  const srv = spawn(process.execPath, [path.join(__dirname, '..', 'server', 'index.js')], { env: { ...process.env, DATA_DIR: DATA, PORT: String(port), HOST: '127.0.0.1' }, stdio: ['ignore', 'pipe', 'pipe'] });
+  HOST = `127.0.0.1:${port}`; BASE = `${TLS ? 'https' : 'http'}://${HOST}`;
+  const srv = spawn(process.execPath, [path.join(__dirname, '..', 'server', 'index.js')], { env: { ...process.env, DATA_DIR: DATA, PORT: String(port), HOST: '127.0.0.1', TLS_CERT: process.env.TLS_CERT || '', TLS_KEY: process.env.TLS_KEY || '' }, stdio: ['ignore', 'pipe', 'pipe'] });
   const srvLog = [];
   for (const st of [srv.stdout, srv.stderr]) st.on('data', (d) => { for (const l of String(d).split('\n')) if (l.trim()) srvLog.push(l); });
   for (let i = 0; i < 100; i++) { try { if ((await fetch(`${BASE}/api/event`)).ok) break; } catch {} await sleep(100); }

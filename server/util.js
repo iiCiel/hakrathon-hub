@@ -41,4 +41,11 @@ const code = (len = 8) => {
 // Socket.IO handle, set by index.js; lets routes push realtime updates.
 const bus = { io: null, emit(room, ev, data) { if (this.io) this.io.to(room).emit(ev, data); } };
 
-module.exports = { wrap, str, int, url, now, code, bus, HttpError };
+// The address people use to reach this portal on a given host (no port when it's the protocol's default).
+function portalUrl(host) {
+  const secure = !!process.env.TLS_CERT;
+  const port = Number(process.env.PORT) || 3000;
+  return `${secure ? 'https' : 'http'}://${host}${port === (secure ? 443 : 80) ? '' : `:${port}`}`;
+}
+
+module.exports = { wrap, str, int, url, now, code, bus, HttpError, portalUrl };

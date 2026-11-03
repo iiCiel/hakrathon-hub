@@ -8,6 +8,7 @@
 //   set STUDENTS=50& set MINUTES=2& node scripts/loadtest.js
 //
 // Runs only use Docker if it is set up (setup-runner.bat); otherwise run calls are counted as skipped.
+// Over HTTPS: set TLS_CERT and TLS_KEY (certificate must cover 127.0.0.1) and NODE_EXTRA_CA_CERTS=<the certificate>.
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -15,6 +16,8 @@ const { monitorEventLoopDelay } = require('node:perf_hooks');
 
 const DATA = fs.mkdtempSync(path.join(os.tmpdir(), 'hak-load-'));
 process.env.DATA_DIR = DATA;
+const TLS = !!process.env.TLS_CERT;
+process.env.TLS_CERT = process.env.TLS_CERT || ''; process.env.TLS_KEY = process.env.TLS_KEY || '';
 const WebSocket = require('ws');
 const { server, bootstrapAdmin } = require('../server/index.js');
 const { get } = require('../server/db');
@@ -54,7 +57,7 @@ class Client {
   // Minimal Socket.IO (Engine.IO v4) client over a raw WebSocket, same as the browser's.
   socket() {
     return new Promise((resolve, reject) => {
-      const ws = new WebSocket(`ws://${HOST}/socket.io/?EIO=4&transport=websocket`, { headers: { Cookie: this.cookie, Origin: BASE } });
+      const ws = new WebSocket(`${TLS ? 'wss' : 'ws'}://${HOST}/socket.io/?EIO=4&transport=websocket`, { headers: { Cookie: this.cookie, Origin: BASE } });
       this.events = 0;
       ws.on('message', (buf) => {
         const m = buf.toString();
@@ -78,7 +81,7 @@ const jitter = (ms) => ms * (0.5 + Math.random());
 async function main() {
   bootstrapAdmin();
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
-  HOST = `127.0.0.1:${server.address().port}`; BASE = `http://${HOST}`;
+  HOST = `127.0.0.1:${server.address().port}`; BASE = `${TLS ? 'https' : 'http'}://${HOST}`;
   await runner.checkRunner();
   const runOk = runner.runnerStatus().ready;
   console.log(`\n  Load test: ${STUDENTS} students for ${MINUTES} min against ${BASE} (data ${DATA})`);

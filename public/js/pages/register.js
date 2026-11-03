@@ -40,7 +40,7 @@ export async function render() {
         h('h2', null, `You're registered, ${r.name.split(/\s+/)[0]}!`),
         h('p', null, 'Event staff review registrations in order (first qualified, first confirmed) and will let you know if your spot is confirmed.'),
         h('ul', null,
-          h('li', null, 'Event day: Friday, Nov 6, 7:30 AM at the College of Business. Bring your Zip card for check-in.'),
+          h('li', null, 'Event day: Friday, Nov 6, 7:30 AM at the College of Business. Bring your Zip card for check-in. Connect your laptop and phone to UA-Secure or UA-BYOD; the portal only works on campus networks.'),
           h('li', null, 'At check-in you get a personal access code to create your portal account.'),
           h('li', null, 'To change anything, contact event staff.')),
         h('p', null, signIn)));

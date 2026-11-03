@@ -29,7 +29,7 @@ const AWARDS = [
 ];
 
 const SCHEDULE = [
-  ['07:30', '08:00', 'Arrival & check-in', 'Scan in, badges, table assignments, Wi-Fi and account test, breakfast.'],
+  ['07:30', '08:00', 'Arrival & check-in', 'Scan in, badges, table assignments, Wi-Fi (connect to UA-Secure or UA-BYOD) and account test, breakfast.'],
   ['08:00', '08:20', 'Welcome & rules', 'Purpose, common challenge, safety, tool rules, judging, deadlines, awards.'],
   ['08:20', '08:35', 'Challenge release', 'Detailed brief and solution lanes released. Questions answered publicly.'],
   ['08:35', '09:15', 'Team lock & ideation', 'Finalize roles, lane, user, problem. Rosters lock at 9:15.'],

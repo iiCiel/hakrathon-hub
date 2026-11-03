@@ -30,7 +30,7 @@ Every screen shows the next meal in the top-right corner, with a pop-up 10 minut
 | When | In the portal |
 |---|---|
 | Nov 5 rehearsal | `demo.bat` walkthrough; real server: Admin → **Rehearsal** and work down both lists |
-| 7:30 check-in | Hand out the participant code; tick "Checked in" in People |
+| 7:30 check-in | Tell everyone to connect to **UA-Secure or UA-BYOD** (the portal is campus-only). Hand out the participant code; tick "Checked in" in People |
 | 8:20 | Event & schedule → tick **Challenge released**; post an announcement |
 | 9:15 | Rosters lock automatically; place stragglers via People or Overview |
 | 10:00 / 3:15 | Checkpoints due (late ones are flagged) |
@@ -45,7 +45,7 @@ Every screen shows the next meal in the top-right corner, with a pop-up 10 minut
 
 ## Settings
 
-Optional `.env` (copy `.env.example`): port, runner mode, GitHub sign-in (OAuth app; callback `<PUBLIC_URL>/api/auth/github/callback`), and a `GITHUB_TOKEN` for snapshotting private repos. The token is only used when an admin presses **Re-snapshot repo** on a team's review page and ticks *Use the server's GitHub token*; teams' own snapshots and the automatic freeze snapshot need public repos. Event times, team size, max teams, email domains (`uakron.edu, zips.uakron.edu` by default) and the schedule are edited in Admin → Event & schedule.
+Optional `.env` (copy `.env.example`): port, HTTPS certificate (see `DEPLOY-LINUX.md`), runner mode, GitHub sign-in (OAuth app; callback `<PUBLIC_URL>/api/auth/github/callback`), and a `GITHUB_TOKEN` for snapshotting private repos. The token is only used when an admin presses **Re-snapshot repo** on a team's review page and ticks *Use the server's GitHub token*; teams' own snapshots and the automatic freeze snapshot need public repos. Event times, team size, max teams, email domains (`uakron.edu, zips.uakron.edu` by default) and the schedule are edited in Admin → Event & schedule.
 
 ## Data and backups
 

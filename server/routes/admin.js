@@ -14,7 +14,7 @@ const { teamPublic, getCheckpoints, emailAllowed } = require('./core');
 const { postMessage } = require('./chat');
 const { completeness, subRow, adminSnapshot, resetFreezeSnapshot } = require('./submit');
 const { tabulate } = require('./judge');
-const { wrap, str, int, now, code, bus, HttpError } = require('../util');
+const { wrap, str, int, now, code, bus, HttpError, portalUrl } = require('../util');
 
 const r = express.Router();
 r.use((req, _res, next) => { try { A.requireRole(req, 'admin'); next(); } catch (e) { next(e); } });
@@ -325,7 +325,7 @@ const csvCell = (v) => {
 const toCsv = (rows, cols) => [cols.join(','), ...rows.map((r2) => cols.map((c) => csvCell(r2[c])).join(','))].join('\r\n');
 // ---------- rehearsal checklist (Nov 5): what can be checked automatically, plus manual ticks ----------
 const REHEARSAL_MANUAL = [
-  ['lan', 'A phone on the event Wi-Fi opened the “Same Wi-Fi” address and signed in'],
+  ['lan', 'A phone on UA-Secure or UA-BYOD opened the portal address below and signed in'],
   ['ngrok', 'If Wi-Fi blocks devices: share-online.bat link tested from a phone (skip if LAN works)'],
   ['testsub', 'A test team made a full submission: repo snapshot, video, brief, disclosures'],
   ['testrun', 'Run in the code editor and a judge “Run it in the sandbox” both worked'],
@@ -378,8 +378,7 @@ function rehearsalAuto() {
   ];
 }
 r.get('/admin/rehearsal', wrap((req) => {
-  const port = Number(process.env.PORT) || 3000;
-  const lan = Object.values(os.networkInterfaces()).flat().filter((i) => i && i.family === 'IPv4' && !i.internal).map((i) => `http://${i.address}:${port}`);
+  const lan = Object.values(os.networkInterfaces()).flat().filter((i) => i && i.family === 'IPv4' && !i.internal).map((i) => portalUrl(i.address));
   const ticks = S.getSettings().rehearsal || {};
   return { auto: rehearsalAuto(), manual: REHEARSAL_MANUAL.map(([id, label]) => ({ id, label, ...(ticks[id] || { done: false }) })), lan, public_url: process.env.PUBLIC_URL || '' };
 }));

@@ -10,6 +10,9 @@ if (path.basename(process.env.DATA_DIR) === 'data' || fs.existsSync(path.join(pr
   console.error('  Refusing to run the demo in what looks like the real data folder. Use data-demo.');
   process.exit(1);
 }
+// The demo is plain http on this computer, whatever a .env on this machine says about HTTPS.
+process.env.TLS_CERT = '';
+process.env.TLS_KEY = '';
 const fresh = !fs.existsSync(path.join(process.env.DATA_DIR, 'hakrathon.db'));
 const { server } = require('../server/index.js');
 const { get, all, run } = require('../server/db');
