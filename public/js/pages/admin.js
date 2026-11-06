@@ -2,12 +2,12 @@ import { h, clear, field, toast, busy, confirmBox, modal, promptBox, fmtTime, fm
 import { api } from '../api.js';
 import { state, on, role, go, loadMe, renderChrome, laneName, route } from '../app.js';
 
-const TABS = [['overview', 'Overview'], ['rehearsal', 'Rehearsal'], ['event', 'Event & schedule'], ['registrations', 'Registrations'], ['checkin', 'Check-in'], ['people', 'People'], ['codes', 'Access codes'], ['scoring', 'Scoring & awards'], ['audit', 'Audit log']];
+const TABS = [['overview', 'Overview'], ['rehearsal', 'Rehearsal'], ['event', 'Event & schedule'], ['staff', 'Staff schedule'], ['registrations', 'Registrations'], ['checkin', 'Check-in'], ['people', 'People'], ['codes', 'Access codes'], ['scoring', 'Scoring & awards'], ['audit', 'Audit log']];
 
 export async function render(route) {
   if (role() !== 'admin') { go('#/'); return h('div'); }
   const tab = TABS.some(([k]) => k === route.params[0]) ? route.params[0] : 'overview';
-  const [body, clock] = await Promise.all([({ overview, rehearsal, event: eventTab, registrations, checkin, people, codes, scoring, audit })[tab](), state.event.is_demo ? demoClock() : null]);
+  const [body, clock] = await Promise.all([({ overview, rehearsal, event: eventTab, staff: staffSchedule, registrations, checkin, people, codes, scoring, audit })[tab](), state.event.is_demo ? demoClock() : null]);
   return h('div', null,
     h('div', { class: 'page-head' }, h('div', null, h('h1', null, 'Admin'), h('p', null, `${state.event.event_name} · event staff controls`))),
     clock,
@@ -180,7 +180,7 @@ async function checkin() {
       const idBox = h('input', { type: 'checkbox', checked: !!x.id_checked, 'aria-label': `Zip card checked for ${x.name}` });
       return h('div', { class: `desk-row ${here ? 'in' : ''}` },
         h('div', { class: 'who' }, h('b', null, x.name), ' ', x.status !== 'confirmed' ? regBadge(x.status) : null,
-          h('div', { class: 'faint' }, x.email, x.team_mode === 'team' && x.team_name ? ` · team ${x.team_name}` : ' · needs a team', x.account_team ? ` · on ${x.account_team}` : ''),
+          h('div', { class: 'faint' }, x.email, x.team_mode === 'team' && x.team_name ? ` · ${/^team\b/i.test(x.team_name) ? '' : 'team '}${x.team_name}` : ' · needs a team', x.account_team ? ` · on ${x.account_team}` : ''),
           x.dietary ? h('div', { class: 'faint', style: { fontSize: '.82rem' } }, '🍽 ', x.dietary) : null,
           x.accommodations ? h('div', { class: 'faint', style: { fontSize: '.82rem' } }, '♿ ', x.accommodations) : null),
         h('div', { class: 'acts' }, here
@@ -215,11 +215,11 @@ async function checkin() {
     teamsBox);
   function teamsCard() {
     return h('section', { class: 'card table-wrap' }, h('h2', null, 'Teams here'),
-      h('table', { class: 'tbl' }, h('thead', null, h('tr', null, ['Team (from registration)', 'Here', 'Still missing'].map((x) => h('th', null, x)))),
+      h('table', { class: 'tbl cards-sm' }, h('thead', null, h('tr', null, ['Team (from registration)', 'Here', 'Still missing'].map((x) => h('th', null, x)))),
         h('tbody', null, d.summary.teams.map((t) => {
           const inN = t.members.filter((m) => m.checked_in).length;
-          return h('tr', null, h('td', null, h('b', null, t.team_name)), h('td', null, `${inN} / ${t.members.length}`),
-            h('td', { class: 'faint' }, t.members.filter((m) => !m.checked_in).map((m) => m.name).join(', ') || '—'));
+          return h('tr', null, h('td', null, h('b', null, t.team_name)), h('td', { 'data-label': 'Here' }, `${inN} / ${t.members.length}`),
+            h('td', { class: 'faint', 'data-label': 'Still missing' }, t.members.filter((m) => !m.checked_in).map((m) => m.name).join(', ') || '—'));
         }))));
   }
   on('staff:update', (x) => { if (!x || x.kind === 'registration') load().catch(() => {}); });
@@ -383,6 +383,65 @@ async function eventTab() {
     h('section', { class: 'card' }, h('h2', null, 'Food'), h('p', { class: 'faint' }, 'Every screen shows the next meal in the top-right corner and pops up a reminder 10 minutes before and when it starts. Put where to get it in Detail.'), h('div', { class: 'table-wrap' }, mealBox)),
     h('div', { class: 'row end', style: { position: 'sticky', bottom: '12px' } }, saveBtn));
   return form;
+}
+
+// ---------------- staff schedule (organizers only) ----------------
+// The organizer schedule from the .docx (tools/import-schedule.js): staff shifts, who does what when,
+// food, backup plans. Students never see it. The timeline row for the current time is highlighted.
+async function staffSchedule() {
+  const { schedule: d } = await api.get('/api/admin/staff-schedule');
+  if (!d) {
+    return h('section', { class: 'card' }, h('h2', null, 'Staff schedule'),
+      h('p', null, 'No organizer schedule imported yet. On the server computer, in the portal folder, run:'),
+      h('pre', { style: { whiteSpace: 'pre-wrap', background: 'var(--line)', padding: '10px', borderRadius: '8px' } }, 'node tools\\import-schedule.js "<path to>\\HAkrathon_2026_Organizer_Schedule.docx"'),
+      h('p', { class: 'faint' }, 'Then reload this page.'));
+  }
+  // "7:00–7:30", "After 7:30": rows run in time order through the day, so a start earlier than the
+  // previous row's start is in the afternoon (1:30 after 12:00 is 1:30 PM).
+  const eventDay = (state.event.schedule || [])[0] ? toDisplay(state.event.schedule[0].start).toDateString() : '';
+  const mins = (t) => { const m = String(t).match(/(\d{1,2}):(\d{2})/g); return m ? m.map((x) => { const [a, b] = x.split(':').map(Number); return a * 60 + b; }) : []; };
+  const spans = (rows) => {
+    let last = -1;
+    return rows.map((r) => {
+      const t = mins(r[0]);
+      if (!t.length) return null;
+      let s = t[0]; while (s < last) s += 720;
+      let e = t.length > 1 ? t[1] : 24 * 60; while (e < s) e += 720;
+      if (/^after/i.test(r[0])) e = 24 * 60;
+      last = s;
+      return [s, e];
+    });
+  };
+  const root = h('div', { class: 'stack' });
+  const draw = () => {
+    const nowD = toDisplay(new Date().toISOString());
+    const nowM = nowD.getHours() * 60 + nowD.getMinutes();
+    const today = nowD.toDateString() === eventDay;
+    let nowRow = null;
+    const table = (t) => {
+      const isTime = /time/i.test(t.headers[0] || '');
+      const sp = isTime ? spans(t.rows) : [];
+      return h('div', { class: 'table-wrap' }, h('table', { class: 'tbl cards-sm staff-sched' },
+        h('thead', null, h('tr', null, t.headers.map((x) => h('th', null, x)))),
+        h('tbody', null, t.rows.map((r, i) => {
+          const live = today && sp[i] && nowM >= sp[i][0] && nowM < sp[i][1];
+          if (live && !nowRow) nowRow = r;
+          return h('tr', { class: live ? 'now' : null }, r.map((c, j) => h('td', { 'data-label': t.headers[j] || '' },
+            j === 0 ? h('b', null, c, live ? h('span', { class: 'badge warn', style: { marginLeft: '6px' } }, 'Now') : null) : c)));
+        }))));
+    };
+    const cards = d.sections.map((sec) => h('section', { class: 'card' }, h('h2', null, sec.title),
+      sec.tables.map(table), sec.notes.map((n) => h('p', { class: 'faint' }, n))));
+    clear(root,
+      h('section', { class: 'card' }, h('h2', { style: { marginBottom: '4px' } }, d.title || 'Organizer schedule'),
+        d.intro.map((x) => h('p', { class: 'faint', style: { margin: '2px 0' } }, x)),
+        nowRow ? h('div', { class: 'staff-now' }, h('b', null, `Now (${fmtTime(new Date().toISOString())}): ${nowRow[1] || ''}`), h('div', null, nowRow.slice(2).join(' '))) : null,
+        h('p', { class: 'faint', style: { fontSize: '.82rem', marginBottom: 0 } }, `From ${d.source}, imported ${fmtDateTime(d.imported_at)}. Staff only: students do not see this page.`)),
+      cards);
+  };
+  draw();
+  const timer = setInterval(() => { if (!root.isConnected) clearInterval(timer); else draw(); }, 60000);
+  return root;
 }
 
 // ---------------- people ----------------

@@ -404,3 +404,7 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: .9rem; }
 .meter { height: 10px; border-radius: 99px; background: var(--line); overflow: hidden; margin-top: 8px; }
 .meter > span { display: block; height: 100%; background: var(--ok-solid); }
 @media (max-width: 640px) { .desk-row { grid-template-columns: 1fr; } .desk-row .acts { justify-content: flex-start; } }
+/* Admin > Staff schedule */
+.staff-sched td { white-space: pre-line; vertical-align: top; }
+.staff-sched tr.now td { background: var(--gold-soft); }
+.staff-now { margin: 10px 0 6px; padding: 10px 12px; border-radius: 8px; background: var(--gold-soft); color: var(--gold-ink); }

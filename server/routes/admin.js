@@ -45,6 +45,13 @@ r.get('/admin/overview', wrap(() => {
 // ---------- settings ----------
 const ISO_KEYS = ['roster_lock_at', 'cp1_at', 'cp2_at', 'upload_open_at', 'build_freeze_at', 'validation_end_at'];
 r.get('/admin/settings', wrap(() => ({ settings: S.getSettings() })));
+
+// Organizer schedule (staff shifts and assignments), imported from the .docx by tools/import-schedule.js.
+// Read from disk on every request so a re-import shows up without a restart.
+r.get('/admin/staff-schedule', wrap(() => {
+  try { return { schedule: JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'staff-schedule.json'), 'utf8')) }; }
+  catch (e) { if (e.code === 'ENOENT') return { schedule: null }; throw new HttpError(500, 'staff-schedule.json is damaged: run tools\\import-schedule.js again.'); }
+}));
 r.put('/admin/settings', wrap((req) => {
   const b = req.body || {};
   const before = S.getSettings();
