@@ -103,8 +103,9 @@ function summary(rows) {
 }
 r.get('/admin/registrations', wrap((req) => {
   admin(req);
-  const rows = regRows();
-  return { registrations: rows, summary: summary(rows), open: !!S.getSettings().signup_open };
+  const map = repoMap();
+  const rows = regRows().map((x) => ({ ...x, github_repo: (repoFor(x.team_name, map) || {}).full || '' }));
+  return { github_auto: !!process.env.GITHUB_ADMIN_TOKEN, registrations: rows, summary: summary(rows), open: !!S.getSettings().signup_open };
 }));
 
 function regById(id) {
@@ -218,4 +219,55 @@ r.post('/admin/registrations/walkin', wrap((req) => {
   return { ok: true, ...out };
 }));
 
-module.exports = { router: r, STATUSES };
+// ---------- staff: GitHub username at the check-in desk ----------
+// <DATA_DIR>/github-repos.json maps team names to repos in the event's GitHub org:
+//   { "org": "COB-HAkrathon", "teams": { "ZipCode": "team-01_ZipCode", "Team A": "team-04" } }
+// With GITHUB_ADMIN_TOKEN set (an org owner's token that can manage collaborators), saving a username
+// also adds that person to their team's repo with Write access. Without it, staff add them by hand.
+const fs = require('node:fs');
+const path = require('node:path');
+const { DATA_DIR } = require('../db');
+const GH_LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$/;
+const teamKey = (s) => String(s || '').toLowerCase().replace(/^team\s+/, '').replace(/[^a-z0-9]/g, '');
+function repoMap() {
+  try {
+    const j = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'github-repos.json'), 'utf8'));
+    const teams = new Map(Object.entries(j.teams || {}).map(([k, v]) => [teamKey(k), String(v)]));
+    return { org: String(j.org || ''), teams };
+  } catch { return { org: '', teams: new Map() }; }
+}
+function repoFor(teamName, map = repoMap()) {
+  const repo = map.teams.get(teamKey(teamName));
+  return map.org && repo ? { org: map.org, repo, full: `${map.org}/${repo}` } : null;
+}
+async function addCollaborator(org, repo, login) {
+  const token = process.env.GITHUB_ADMIN_TOKEN;
+  if (!token) return 'saved (add to repo by hand)';
+  try {
+    const res = await fetch(`https://api.github.com/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/collaborators/${encodeURIComponent(login)}`, {
+      method: 'PUT', signal: AbortSignal.timeout(10000),
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'User-Agent': 'hakrathon-hub', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ permission: 'push' }),
+    });
+    if (res.status === 201) return 'invited (they accept on github.com/notifications)';
+    if (res.status === 204) return 'already has access';
+    if (res.status === 404) return 'GitHub said not found: check the username, or the token cannot manage this repo';
+    if (res.status === 422) return 'GitHub refused (422): check the username';
+    return `GitHub error ${res.status}`;
+  } catch (e) { return `could not reach GitHub (${e.name})`; }
+}
+r.post('/admin/registrations/:id/github', wrap(async (req) => {
+  admin(req);
+  const g = regById(req.params.id);
+  const login = str((req.body || {}).login, { max: 39 }).replace(/^@/, '');
+  if (login && !GH_LOGIN.test(login)) throw new HttpError(400, 'That is not a valid GitHub username (letters, numbers and single dashes).');
+  const target = repoFor(g.team_name);
+  let status = '';
+  if (login) status = target ? await addCollaborator(target.org, target.repo, login) : 'saved (no repo set for this team)';
+  run('UPDATE registrations SET github_login = ?, github_status = ?, updated_at = ? WHERE id = ?', login, status, now(), g.id);
+  audit(req.user.id, 'registration.github', { id: g.id, login, repo: target ? target.full : '' });
+  changed();
+  return { ok: true, login, status, repo: target ? target.full : '' };
+}));
+
+module.exports = { router: r, STATUSES, repoFor, repoMap };

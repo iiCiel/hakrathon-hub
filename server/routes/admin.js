@@ -445,10 +445,10 @@ r.get('/admin/export/:what', (req, res, next) => {
       cols = ['email', 'code', 'role', 'note', 'uses', 'max_uses', 'revoked'];
     } else if (what === 'registrations' || what === 'attendance') {
       rows = all(`SELECT g.name, g.email, g.status, g.major, g.class_level, g.team_mode, g.team_name, g.teammates, g.lane, g.preferred_role, g.skills, g.experience,
-        g.technical, g.dietary, g.accommodations, g.media_ok, g.invite_code, g.checked_in_at, g.id_checked, g.staff_note, g.created_at, t.name AS account_team
+        g.technical, g.dietary, g.accommodations, g.media_ok, g.invite_code, g.checked_in_at, g.id_checked, g.github_login, g.github_status, g.staff_note, g.created_at, t.name AS account_team
         FROM registrations g LEFT JOIN users u ON u.email = g.email LEFT JOIN teams t ON t.id = u.team_id ORDER BY ${what === 'attendance' ? "g.checked_in_at = '', g.name" : 'g.id'}`);
       if (what === 'attendance') rows = rows.filter((x) => x.status === 'confirmed' || x.checked_in_at);
-      cols = what === 'attendance' ? ['name', 'email', 'status', 'checked_in_at', 'id_checked', 'account_team', 'invite_code', 'dietary', 'accommodations']
+      cols = what === 'attendance' ? ['name', 'email', 'status', 'checked_in_at', 'id_checked', 'github_login', 'github_status', 'team_name', 'account_team', 'invite_code', 'dietary', 'accommodations']
         : ['name', 'email', 'status', 'major', 'class_level', 'team_mode', 'team_name', 'teammates', 'lane', 'preferred_role', 'skills', 'experience', 'technical', 'dietary', 'accommodations', 'media_ok', 'invite_code', 'checked_in_at', 'id_checked', 'staff_note', 'created_at'];
     } else if (what === 'mentor-log') {
       rows = all(`SELECT h.created_at, t.name AS team, h.kind, h.summary, h.status, m.name AS mentor, h.mentor_note, h.resolved_at

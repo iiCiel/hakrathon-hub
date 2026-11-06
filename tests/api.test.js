@@ -219,6 +219,18 @@ test('event registration, check-in desk, and account carry-over', async () => {
   const me = ok(await stu.post('/api/auth/register', { invite: ci.code, email: 'reg1@zips.uakron.edu', name: 'Reg One', password: 'password123', agree: true })).user;
   assert.equal(me.checked_in, true);
   assert.equal(me.major, 'Finance');
+  // GitHub username at the desk: saved per registration, team mapped to its repo; no token means staff add by hand.
+  fs.writeFileSync(path.join(DATA, 'github-repos.json'), JSON.stringify({ org: 'COB-Test', teams: { 'Reg Team': 'team-01_Reg' } }));
+  status(await p[0].post(`/api/admin/registrations/${r1.id}/github`, { login: 'someone' }), 403);
+  status(await admin.post(`/api/admin/registrations/${r1.id}/github`, { login: 'bad name!' }), 400, 'invalid GitHub username');
+  const gh = ok(await admin.post(`/api/admin/registrations/${r1.id}/github`, { login: '@Reg-One' }));
+  assert.equal(gh.login, 'Reg-One');
+  assert.equal(gh.repo, 'COB-Test/team-01_Reg');
+  assert.match(gh.status, /by hand/);
+  const ghRow = ok(await admin.get('/api/admin/registrations')).registrations.find((x) => x.id === r1.id);
+  assert.equal(ghRow.github_login, 'Reg-One');
+  assert.equal(ghRow.github_repo, 'COB-Test/team-01_Reg');
+  assert.match(ok(await admin.get('/api/admin/export/attendance.csv')), /Reg-One/);
   const w = ok(await admin.post('/api/admin/registrations/walkin', { name: 'Walk In', email: 'walk1@zips.uakron.edu', id_checked: true }));
   assert.match(w.code, /^PAR-/);
   status(await admin.post('/api/admin/registrations/walkin', { name: 'Walk In', email: 'walk1@zips.uakron.edu' }), 409);

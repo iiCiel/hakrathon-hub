@@ -144,8 +144,18 @@ async function checkin() {
     oninput: () => { q = search.value.trim().toLowerCase(); drawList(); } });
   const teamsBox = h('div');
   const load = async () => { d = await api.get('/api/admin/registrations'); drawCounts(); drawSeg(); drawList(); clear(teamsBox, d.summary.teams.length ? teamsCard() : null); };
-  const doCheck = async (x, on, idChecked, btn) => {
+  const saveGh = async (x, login, btn, quiet) => {
+    if (btn) busy(btn, true, 'Saving…');
+    try {
+      const r = await api.post(`/api/admin/registrations/${x.id}/github`, { login });
+      if (!quiet) toast(h('div', null, h('b', null, login ? `GitHub @${r.login} saved for ${x.name}.` : `GitHub username cleared for ${x.name}.`), r.status ? h('div', null, r.status) : null), r.status && /not found|refused|error|could not/i.test(r.status) ? 'bad' : 'ok', 9000);
+      if (!quiet) await load();
+      return true;
+    } catch (e) { toast(e.message, 'bad'); if (btn) busy(btn, false); return false; }
+  };
+  const doCheck = async (x, on, idChecked, btn, ghLogin) => {
     if (btn) busy(btn, true, on ? 'Checking in…' : 'Undoing…');
+    if (on && ghLogin != null && ghLogin.trim() !== (x.github_login || '')) { if (!(await saveGh(x, ghLogin.trim(), null, true))) { if (btn) busy(btn, false); return; } }
     try {
       const r = await api.post(`/api/admin/registrations/${x.id}/checkin`, { in: on, id_checked: idChecked });
       if (on) toast(h('div', null, h('b', null, `${x.name} is checked in.`), r.code ? h('div', null, 'Access code: ', h('span', { class: 'code-chip' }, r.code), ' (write it on the badge)') : h('div', null, 'They already have a portal account.')), 'ok', 9000);
@@ -178,17 +188,23 @@ async function checkin() {
     clear(list, rows.map((x) => {
       const here = !!x.checked_in_at;
       const idBox = h('input', { type: 'checkbox', checked: !!x.id_checked, 'aria-label': `Zip card checked for ${x.name}` });
+      const ghBox = h('input', { type: 'text', class: 'gh-input', value: x.github_login || '', placeholder: 'GitHub username', maxlength: 39, autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false', 'aria-label': `GitHub username for ${x.name}`, style: { width: '170px' } });
+      const ghSave = h('button', { class: 'btn secondary sm', onclick: (e) => saveGh(x, ghBox.value.trim(), e.currentTarget) }, 'Save');
+      const ghLine = h('div', { class: 'faint', style: { fontSize: '.82rem' } },
+        x.github_repo ? ['Repo: ', h('a', { href: `https://github.com/${x.github_repo}/settings/access`, target: '_blank', rel: 'noopener' }, x.github_repo)] : 'No GitHub repo set for this team',
+        x.github_login ? ` · @${x.github_login}` : '', x.github_status ? ` · ${x.github_status}` : '');
       return h('div', { class: `desk-row ${here ? 'in' : ''}` },
         h('div', { class: 'who' }, h('b', null, x.name), ' ', x.status !== 'confirmed' ? regBadge(x.status) : null,
           h('div', { class: 'faint' }, x.email, x.team_mode === 'team' && x.team_name ? ` · ${/^team\b/i.test(x.team_name) ? '' : 'team '}${x.team_name}` : ' · needs a team', x.account_team ? ` · on ${x.account_team}` : ''),
           x.dietary ? h('div', { class: 'faint', style: { fontSize: '.82rem' } }, '🍽 ', x.dietary) : null,
-          x.accommodations ? h('div', { class: 'faint', style: { fontSize: '.82rem' } }, '♿ ', x.accommodations) : null),
+          x.accommodations ? h('div', { class: 'faint', style: { fontSize: '.82rem' } }, '♿ ', x.accommodations) : null,
+          ghLine, h('div', { class: 'row', style: { gap: '6px', marginTop: '4px' } }, ghBox, here ? ghSave : null)),
         h('div', { class: 'acts' }, here
           ? [badge(`✓ ${fmtTime(x.checked_in_at)}`, 'ok'), x.id_checked ? h('span', { class: 'faint' }, 'Zip card ✓') : null,
             x.user_id ? h('span', { class: 'faint' }, 'Has account') : x.invite_code ? h('span', { class: 'code-chip', title: 'Personal access code' }, x.invite_code) : null,
             h('button', { class: 'btn ghost sm', onclick: (e) => doCheck(x, false, false, e.currentTarget) }, 'Undo')]
           : [h('label', { class: 'check', style: { margin: 0 } }, idBox, h('span', null, 'Zip card checked')),
-            h('button', { class: 'btn', onclick: (e) => doCheck(x, true, idBox.checked, e.currentTarget) }, x.status === 'confirmed' ? 'Check in' : 'Check in anyway')]));
+            h('button', { class: 'btn', onclick: (e) => doCheck(x, true, idBox.checked, e.currentTarget, ghBox.value) }, x.status === 'confirmed' ? 'Check in' : 'Check in anyway')]));
     }), pool.length > rows.length ? h('p', { class: 'faint' }, `Showing 120 of ${pool.length}. Type to narrow down.`) : null);
   }
   async function walkIn() {
@@ -210,7 +226,7 @@ async function checkin() {
     h('section', { class: 'card' }, counts),
     h('section', { class: 'card' },
       h('div', { class: 'card-head', style: { flexWrap: 'wrap', gap: '8px' } }, h('h2', null, 'Check-in desk'), segBox),
-      h('p', { class: 'faint', style: { marginTop: 0 } }, 'Find the student, check their Zip card, press Check in, and write the access code on their badge. They use it to create their portal account.'),
+      h('p', { class: 'faint', style: { marginTop: 0 } }, d.github_auto ? 'Find the student, type their GitHub username, check their Zip card and press Check in. They are added to their team repo with Write access and accept the invite on github.com/notifications.' : 'Find the student, type their GitHub username, check their Zip card and press Check in. Then add them to the team repo shown under their name (Collaborators > Add people, Write).'),
       search, h('div', { style: { marginTop: '10px' } }, list)),
     teamsBox);
   function teamsCard() {
